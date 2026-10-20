@@ -64,6 +64,11 @@ export interface EdgeEntity {
   polyline: number[]
 }
 
+export interface VertexEntity {
+  index: number
+  point: number[]
+}
+
 export interface Model {
   spec: Spec
   parameters: Record<string, Json>
@@ -71,7 +76,7 @@ export interface Model {
   can_undo: boolean
   can_redo: boolean
   path: string | null
-  entities: { faces: FaceEntity[]; edges: EdgeEntity[] } | null
+  entities: { faces: FaceEntity[]; edges: EdgeEntity[]; vertices?: VertexEntity[] } | null
   volume_mm3: number | null
   bbox_mm: [number, number, number] | null
   mass_kg: number | null
@@ -83,7 +88,7 @@ export interface Model {
 
 /** A stored selection: a geometric signature, re-checked against the model after every change. */
 export interface SelRef {
-  kind: 'face' | 'edge'
+  kind: 'face' | 'edge' | 'vertex'
   point: number[]
   type: string
   normal?: number[]
@@ -235,8 +240,10 @@ export interface DrawingDimension {
 
 export const desktop: DesktopBridge | undefined = (window as unknown as { desktop?: DesktopBridge }).desktop
 
-export function refOf(e: FaceEntity | EdgeEntity, kind: 'face' | 'edge'): SelRef {
-  const base = { kind, point: e.point, type: e.type, feature: e.feature, index: e.index }
+export function refOf(e: FaceEntity | EdgeEntity | VertexEntity, kind: 'face' | 'edge' | 'vertex'): SelRef {
+  if (kind === 'vertex') return { kind, point: e.point, type: 'VERTEX', feature: null, index: e.index }
+  const f0 = e as FaceEntity | EdgeEntity
+  const base = { kind, point: f0.point, type: f0.type, feature: f0.feature, index: f0.index }
   if (kind === 'face') {
     const f = e as FaceEntity
     return { ...base, normal: f.normal, area: f.area, radius: f.radius, hole_instance: f.hole_instance,

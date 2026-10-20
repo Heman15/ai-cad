@@ -223,3 +223,24 @@ def test_v1_projects_migrate(tmp_path):
     assert p.spec.material.density == 2700
     assert "migrated from project format v1" in p.spec.source["migration_notes"]
     assert PartSpec.from_dict(p.spec.to_dict()).to_dict()["spec_version"] == 2
+
+
+def test_measure_vertices_edges_and_hole_centres():
+    from cadcore.mesh import describe, measure
+
+    p = Project()
+    assert p.execute("create_plate", length=120, width=80, thickness=8).ok
+    assert p.execute("add_hole", id="h", diameter=6.6, positions=[[10, 10], [110, 10]]).ok
+    d = describe(p.result)
+    v = {tuple(x["point"]): x for x in d["vertices"]}
+    r = measure(p.result, [{"kind": "vertex", "point": [0, 0, 0]}, {"kind": "vertex", "point": [120, 80, 8]}])
+    assert r["ok"] and (r["dx_mm"], r["dy_mm"], r["dz_mm"]) == (120, 80, 8)
+    assert abs(r["min_distance_mm"] - (120**2 + 80**2 + 8**2) ** 0.5) < 1e-3 and r["points"] == [[0, 0, 0], [120, 80, 8]]
+    assert (120.0, 80.0, 8.0) in v
+    cyl = [f for f in d["faces"] if f["type"] == "CYLINDER"]
+    r = measure(p.result, [{"kind": "face", "point": c["point"], "type": "CYLINDER", "area": c["area"]} for c in cyl])
+    assert r["center_distance_mm"] == 100 and abs(r["min_distance_mm"] - 93.4) < 1e-3 and len(r["centers"]) == 2
+    edges = [e for e in d["edges"] if e["type"] == "LINE"][:2]
+    r = measure(p.result, [{"kind": "edge", "point": e["point"], "type": "LINE", "length": e["length"]} for e in edges])
+    assert r["ok"] and "angle_deg" in r
+    assert measure(p.result, [{"kind": "vertex", "point": [5, 5, 5]}])["ok"] is False  # no vertex there: reported, not guessed

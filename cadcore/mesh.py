@@ -127,7 +127,8 @@ def describe(result: BuildResult, tolerance: float = 0.05, angular: float = 0.2)
         pts = [edge.startPoint(), edge.endPoint()] if info["type"] == "LINE" else [edge.positionAt(k / 32) for k in range(33)]
         edges.append({"index": i, "feature": owner(edge.positionAt(0.5)), **info,
                       "polyline": [_r(c) for p in pts for c in p.toTuple()]})
-    return {"faces": faces, "edges": edges}
+    vertices = [{"index": i, "point": _vec(cq.Vector(*v.toTuple()))} for i, v in enumerate(solid.Vertices())]
+    return {"faces": faces, "edges": edges, "vertices": vertices}
 
 
 # ---------------- selection references ----------------
@@ -138,9 +139,16 @@ def resolve(result: BuildResult, ref: dict[str, Any]) -> dict[str, Any]:
     Returns {"status": "ok", "index": i, ...current info} or {"status": "missing"/"changed", "reason": ...}.
     """
     kind, point = ref.get("kind"), ref.get("point")
-    if kind not in ("face", "edge") or not point:
-        return {"status": "invalid", "reason": "selection reference must have kind face/edge and a point"}
+    if kind not in ("face", "edge", "vertex") or not point:
+        return {"status": "invalid", "reason": "selection reference must have kind face/edge/vertex and a point"}
     solid = result.shape.val()
+    if kind == "vertex":
+        p = cq.Vector(*point)
+        near = [i for i, x in enumerate(solid.Vertices()) if (cq.Vector(*x.toTuple()) - p).Length < 0.05]
+        if not near:
+            return {"status": "missing", "reason": "the selected vertex no longer exists after the last change; select it again"}
+        return {"status": "ok", "kind": "vertex", "index": near[0], "type": "VERTEX", "point": _vec(p),
+                "feature": _Owner(result)(p)}
     v = cq.Vertex.makeVertex(*point)
     items = solid.Faces() if kind == "face" else solid.Edges()
     near = [(i, e) for i, e in enumerate(items) if e.distance(v) < 0.05]
@@ -167,18 +175,33 @@ def resolve(result: BuildResult, ref: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _entity(solid, r: dict[str, Any]):
+    return {"face": solid.Faces, "edge": solid.Edges, "vertex": solid.Vertices}[r["kind"]]()[r["index"]]
+
+
 def measure(result: BuildResult, refs: list[dict[str, Any]]) -> dict[str, Any]:
-    """Measurements for one or two resolved selections."""
+    """Measurements for one or two resolved selections (faces, edges or vertices).
+
+    For two entities, "points" holds the closest pair, so the UI can draw the dimension line.
+    """
+    import math
+
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+
     resolved = [resolve(result, r) for r in refs]
     bad = [r for r in resolved if r["status"] not in ("ok", "changed")]
     if bad:
         return {"ok": False, "message": bad[0]["reason"]}
+    if len(resolved) not in (1, 2):
+        return {"ok": False, "message": "select one or two entities to measure"}
     solid = result.shape.val()
-    ents = [(solid.Faces() if r["kind"] == "face" else solid.Edges())[r["index"]] for r in resolved]
+    ents = [_entity(solid, r) for r in resolved]
     out: dict[str, Any] = {"ok": True, "entities": resolved}
     if len(ents) == 1:
         r = resolved[0]
-        if r["kind"] == "face":
+        if r["kind"] == "vertex":
+            out["x_mm"], out["y_mm"], out["z_mm"] = r["point"]
+        elif r["kind"] == "face":
             out["area_mm2"] = r["area"]
             if "radius" in r:
                 out["diameter_mm"] = _r(2 * r["radius"])
@@ -187,17 +210,31 @@ def measure(result: BuildResult, refs: list[dict[str, Any]]) -> dict[str, Any]:
             if "radius" in r:
                 out["diameter_mm"] = _r(2 * r["radius"])
         return out
-    if len(ents) != 2:
-        return {"ok": False, "message": "select one or two entities to measure"}
-    out["min_distance_mm"] = _r(ents[0].distance(ents[1]))
+    ext = BRepExtrema_DistShapeShape(ents[0].wrapped, ents[1].wrapped)
+    if not (ext.IsDone() and ext.NbSolution() > 0):
+        return {"ok": False, "message": "could not compute the distance between these entities"}
+    p1, p2 = ext.PointOnShape1(1), ext.PointOnShape2(1)
+    out["points"] = [[_r(p1.X()), _r(p1.Y()), _r(p1.Z())], [_r(p2.X()), _r(p2.Y()), _r(p2.Z())]]
+    out["min_distance_mm"] = _r(ext.Value())
+    out["dx_mm"], out["dy_mm"], out["dz_mm"] = (_r(abs(b - a)) for a, b in zip(*out["points"]))
     a, b = resolved
     if a["kind"] == b["kind"] == "face" and "normal" in a and "normal" in b:
         na, nb = cq.Vector(*a["normal"]), cq.Vector(*b["normal"])
         cosang = max(-1.0, min(1.0, na.dot(nb)))
-        import math
         out["angle_deg"] = _r(math.degrees(math.acos(abs(cosang))))
         if abs(abs(cosang) - 1) < 1e-6:
             out["parallel_distance_mm"] = _r(abs((cq.Vector(*b["point"]) - cq.Vector(*a["point"])).dot(na)))
-    if "center" in a and "center" in b and "radius" in a and "radius" in b:
+    if a["kind"] == b["kind"] == "edge" and a["type"] == b["type"] == "LINE":
+        da, db = ((e.endPoint() - e.startPoint()).normalized() for e in ents)
+        out["angle_deg"] = _r(math.degrees(math.acos(min(1.0, abs(da.dot(db))))))
+    if "center" in a and "center" in b and "radius" in a and "radius" in b and a["kind"] == b["kind"] == "edge":
         out["center_distance_mm"] = _r((cq.Vector(*a["center"]) - cq.Vector(*b["center"])).Length)
+        out["centers"] = [a["center"], b["center"]]
+    elif all("axis_point" in r for r in resolved):  # two cylinders: distance between (parallel) axes
+        pa, da = cq.Vector(*a["axis_point"]), cq.Vector(*a["axis_dir"])
+        pb, db = cq.Vector(*b["axis_point"]), cq.Vector(*b["axis_dir"])
+        if abs(abs(da.dot(db)) - 1) < 1e-6:
+            d = pb - pa
+            out["center_distance_mm"] = _r((d - da * d.dot(da)).Length)
+            out["centers"] = [a["center"], b["center"]]
     return out

@@ -28,13 +28,13 @@ with sync_playwright() as pw:
     page.get_by_label("thickness").fill("10")
     page.get_by_role("button", name="OK").click()
     expect(page.locator(".readout")).to_contain_text("100.0 × 10.0 × 10.0 mm")
-    page.get_by_role("button", name="Properties").click()
+    page.get_by_role("button", name="Properties", exact=True).click()
     page.locator("section", has_text="Material & mass").locator("select").select_option("steel")
     expect(page.locator("section", has_text="Material & mass")).to_contain_text("7850")
 
     page.get_by_role("button", name="Analysis", exact=True).click()
-    page.get_by_role("button", name="face", exact=True).click()
-    page.get_by_role("button", name="iso", exact=True).click()
+    page.get_by_role("button", name="Face", exact=True).click()
+    page.get_by_role("button", name="Isometric", exact=True).click()
     page.wait_for_timeout(500)
 
     def pick(x, y, z):
@@ -42,10 +42,10 @@ with sync_playwright() as pw:
         page.mouse.click(p["x"], p["y"])
 
     # fixed end x=0 is hidden in iso view (camera at +x,-y); look from the left first
-    page.get_by_role("button", name="front", exact=True).click()
+    page.get_by_role("button", name="Front", exact=True).click()
     page.wait_for_timeout(300)
     page.evaluate("1")
-    page.get_by_role("button", name="iso", exact=True).click()
+    page.get_by_role("button", name="Isometric", exact=True).click()
     page.wait_for_timeout(300)
     pick(100, 5, 5)  # tip face (visible in iso)
     page.get_by_role("button", name=re.compile("Add load on 1 selected")).click()
@@ -75,8 +75,7 @@ with sync_playwright() as pw:
     page.get_by_role("button", name="hide").click()
 
     # DFM: add a deep thin pocket and check
-    page.get_by_role("button", name="＋ Feature ▾").click()
-    page.get_by_role("button", name="Extruded cut", exact=True).click()
+    page.get_by_role("button", name="Extruded Cut", exact=True).click()
     page.get_by_label("Plane / face").select_option("top")
     page.locator(".shape input").nth(0).fill("20")
     page.locator(".shape input").nth(1).fill("6")

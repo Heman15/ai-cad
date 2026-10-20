@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Fragment, useEffect, useState } from 'react'
+import { Dot, Eye, EyeOff, Trash2 } from 'lucide-react'
+import { FEATURE_ICONS } from './ui'
 import { api, fmt, type Feature, type Json, type Model, type SelRef } from './api'
 
 export type Run = (command: string, args: Record<string, unknown>) => Promise<boolean>
@@ -42,10 +44,6 @@ export function ValueField({ value, onCommit, evaluated, placeholder }: {
 
 /* ---------------- feature tree ---------------- */
 
-const ICONS: Record<string, string> = {
-  extrude: '▤', revolve: '◎', hole: '⊙', fillet: '◜', chamfer: '◸', shell: '▢', sketch: '✎',
-  pattern_linear: '⋯', pattern_circular: '❂', mirror: '⇋',
-}
 
 export function FeatureTree({ model, selected, onSelect, run }: {
   model: Model; selected: string | null; onSelect: (id: string | null) => void; run: Run
@@ -68,13 +66,14 @@ export function FeatureTree({ model, selected, onSelect, run }: {
                 d?.geometry ? 'depends on earlier geometry' : '',
                 usedBy.length ? `used by: ${usedBy.join(', ')}` : '',
               ].filter(Boolean).join('\n')}>
-              <span className="icon">{ICONS[f.type] ?? '•'}</span>
+              <span className="icon">{(() => { const I = FEATURE_ICONS[f.type] ?? Dot; return <I size={15} strokeWidth={1.7} /> })()}</span>
               <span className="name">{f.id}</span>
               <span className="type">{f.type}</span>
               <span className="actions" onClick={(e) => e.stopPropagation()}>
                 <button className="link" title={f.suppressed ? 'Unsuppress' : 'Suppress'}
-                  onClick={() => run('suppress_feature', { id: f.id, suppressed: !f.suppressed })}>{f.suppressed ? '◌' : '●'}</button>
-                <button className="link danger" title="Delete" onClick={() => run('remove_feature', { id: f.id })}>✕</button>
+                  aria-label={f.suppressed ? 'Unsuppress' : 'Suppress'}
+                  onClick={() => run('suppress_feature', { id: f.id, suppressed: !f.suppressed })}>{f.suppressed ? <EyeOff size={13} /> : <Eye size={13} />}</button>
+                <button className="link danger" title="Delete" aria-label="Delete" onClick={() => run('remove_feature', { id: f.id })}><Trash2 size={13} /></button>
               </span>
             </li>
           )

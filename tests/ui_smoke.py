@@ -36,7 +36,6 @@ with sync_playwright() as pw:
     step("plate created from template")
 
     # Hole feature with four positions on the top face.
-    page.get_by_role("button", name="＋ Feature ▾").click()
     page.get_by_role("button", name="Hole", exact=True).click()
     page.get_by_label("Feature id").fill("mounting_holes")
     page.get_by_label('Positions "u,v; u,v; …"').fill("10,10; 90,10; 10,50; 90,50")
@@ -46,17 +45,35 @@ with sync_playwright() as pw:
     step("4 holes added (volume 29434.5 mm³)")
 
     # Select one hole in the 3D view (face mode) and check entity mapping.
-    page.get_by_role("button", name="iso", exact=True).click()
-    page.get_by_role("button", name="face", exact=True).click()
+    page.get_by_role("button", name="Isometric", exact=True).click()
+    page.get_by_role("button", name="Face", exact=True).click()
     page.wait_for_timeout(400)
     # A point on the far inner wall of hole 4 (centre 90,50), which faces the iso camera.
     pt = page.evaluate("window.__cadToScreen(90 - 1.9, 50 + 2.3, 4.2)")
     page.mouse.click(pt["x"], pt["y"])
-    page.get_by_role("button", name="Properties").click()
+    page.get_by_role("button", name="Properties", exact=True).click()
     expect(page.locator(".sel-list")).to_contain_text("feature mounting_holes · hole 4 of 4")
     expect(page.locator(".stats").first).to_contain_text("6 mm")
     page.screenshot(path=OUT / "ui-hole-selected.png")
     step("clicked hole maps to feature mounting_holes, instance 4/4, measured Ø6")
+
+    # Measure tool: two hole edge points -> 80 mm, drawn in the 3D view.
+    page.get_by_role("button", name="Measure tool").click()
+    page.wait_for_timeout(300)
+    for x in (10 - 3, 90 - 3):
+        p = page.evaluate(f"window.__cadToScreen({x}, 10, 5)")
+        page.mouse.click(p["x"], p["y"])
+        page.wait_for_timeout(200)
+    panel = page.locator(".measure-panel")
+    expect(panel).to_contain_text("Distance")
+    expect(panel.locator("dd").first).to_have_text("80 mm")
+    expect(page.locator(".vp-label.measure")).to_have_text("80 mm")
+    page.screenshot(path=OUT / "ui-measure.png")
+    page.keyboard.press("Escape")
+    expect(page.locator(".vp-label.measure")).to_have_count(0)
+    page.keyboard.press("Escape")
+    expect(panel).to_have_count(0)
+    step("measure tool: point-to-point 80 mm shown in panel and 3D view; Esc clears, Esc exits")
 
     # Manual edit of a variable: thickness 5 -> 8.
     row = page.locator("table.vars tr", has_text="thickness")
@@ -88,15 +105,15 @@ with sync_playwright() as pw:
     step("material assigned, mass shown")
 
     # Undo / redo.
-    page.get_by_role("button", name="↶ Undo").click()
+    page.get_by_role("button", name="Undo", exact=True).click()
     expect(page.locator("section", has_text="Material & mass")).to_contain_text("assign a material")
-    page.get_by_role("button", name="↷ Redo").click()
+    page.get_by_role("button", name="Redo", exact=True).click()
     expect(page.locator("section", has_text="Material & mass")).to_contain_text("aluminum_6061")
     step("undo/redo")
 
     # Fillet two selected vertical edges.
-    page.get_by_role("button", name="iso").click()
-    page.get_by_role("button", name="edge", exact=True).click()
+    page.get_by_role("button", name="Isometric", exact=True).click()
+    page.get_by_role("button", name="Edge", exact=True).click()
     page.wait_for_timeout(400)
     for x, y in ((100, 0), (100, 60)):
         p = page.evaluate(f"window.__cadToScreen({x}, {y}, 4)")
@@ -104,7 +121,6 @@ with sync_playwright() as pw:
         page.mouse.click(p["x"], p["y"])
         page.keyboard.up("Shift")
     expect(page.locator(".sel-list li")).to_have_count(2)
-    page.get_by_role("button", name="＋ Feature ▾").click()
     page.get_by_role("button", name="Fillet", exact=True).click()
     page.get_by_label("radius").fill("6")
     page.get_by_role("button", name="OK").click()

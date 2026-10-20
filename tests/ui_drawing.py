@@ -25,7 +25,7 @@ with sync_playwright() as pw:
     page.get_by_role("button", name="New", exact=True).click()
 
     # import through the real file input
-    page.locator('input[type=file][accept*=".pdf"]').set_input_files(str(PDF))
+    page.locator('.ribbon input[type=file][accept*=".pdf"]').set_input_files(str(PDF))
     expect(page.locator(".src-page img")).to_be_visible()
     expect(page.locator(".tabs button.on")).to_have_text("Drawing")
     print("✓ PDF imported, page rendered in the Drawing tab")
@@ -64,7 +64,8 @@ with sync_playwright() as pw:
     page.screenshot(path=OUT / "ui-drawing-tab.png")
     print("✓ corrected D3 = 6 (confirmed), mismatch cleared; clicking a box focuses its row")
 
-    page.get_by_role("button", name="2D drawing").click()
+    page.get_by_role("tab", name="Import / Export").click()
+    page.get_by_role("button", name="2D Drawing").click()
     page.get_by_label("compare with source").check()
     expect(page.locator(".drawing-views img")).to_have_count(2)
     page.wait_for_timeout(800)

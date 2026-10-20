@@ -29,7 +29,7 @@ _NUM_OR_FORMULA = {"anyOf": [{"type": "number"}, {"type": "string"}],
 _REF = {
     "type": "object",
     "description": "A selection reference exactly as returned by get_selection or list_entities.",
-    "properties": {"kind": {"type": "string", "enum": ["face", "edge"]}, "point": {"type": "array", "items": _NUM},
+    "properties": {"kind": {"type": "string", "enum": ["face", "edge", "vertex"]}, "point": {"type": "array", "items": _NUM},
                    "type": {"type": "string"}, "normal": {"type": "array", "items": _NUM}, "area": _NUM, "length": _NUM},
     "required": ["kind", "point", "type"],
 }

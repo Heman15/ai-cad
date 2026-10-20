@@ -108,3 +108,7 @@ Windows and macOS installers are not built. The code is portable, but the script
   - **AI:** the in-app assistant supports any OpenAI-compatible provider. Added the MCP server for Claude Code, live sync (`/api/version`), and selection sharing.
   - **Tests:** 64 unit/API tests and 5 UI suites pass.
   - **Packaging:** the packaged AppImage/.deb from 2026-10-18 doesn't contain these changes yet; it needs a rebuild.
+- **2026-10-19 (2):**
+  - **Interface:** command ribbon (Features, Sketch, Evaluate, Sheet Metal, Import / Export), FeatureManager tree with icons, heads-up view toolbar (standard views, display styles, selection filter), orientation triad, gradient viewport, hover pre-highlight, status bar, and a light/dark/system theme switch.
+  - **Measure tool:** picks vertices, edges and faces (no Shift needed); shows distance, dX/dY/dZ, angle, centre distance, diameter, length, area or coordinates in a panel and as a dimension in the 3D view. "Dimensions" shows the overall part size in 3D. Backend: vertex references, closest-point pairs, and the angle between straight edges.
+  - **Tests:** 65 unit/API tests and 5 UI suites pass (the smoke suite now covers the measure tool).

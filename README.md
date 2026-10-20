@@ -11,6 +11,7 @@ Describe a part or drop in a drawing. The assistant asks for whatever it needs, 
 | | |
 |---|---|
 | **Parametric modelling** | Feature tree containing: constraint sketches, extrude/cut, revolve, sweep, loft, holes (counterbore, countersink, tapped), threads, fillet, chamfer, shell, patterns, mirror. Variables with formulas (`=width/2 - 5`) and units (`2 in`) |
+| **Measure** | Point-to-point, edge, face and hole-centre distances with dX/dY/dZ, angles, diameters and areas, drawn as dimensions in the 3D view; overall part dimensions on demand |
 | **Constraint sketcher** | Lines, arcs, circles and splines; 13 constraint types plus dimensions; a fixed origin; live degree-of-freedom and conflict reporting |
 | **AI assistant** | Builds and edits through validated tools, asks about missing dimensions, records requirements separately from assumptions, and proposes redesign alternatives you accept with one click |
 | **Drawing → CAD** | Import a PDF or image. Every dimension is traced to its spot on the drawing and to the model parameter it drives; mismatches are flagged and you can correct them there |
@@ -18,7 +19,7 @@ Describe a part or drop in a drawing. The assistant asks for whatever it needs, 
 | **Analysis** | Linear-static FEA (quadratic tetrahedra) validated against beam theory; manufacturability checks for CNC milling, FDM printing and sheet metal |
 | **Sheet metal** | Base and edge flanges with real bends, corner-collision checks, flat pattern with bend allowance, DXF export |
 | **Assemblies** | Parts linked by file, mates (coincident, distance, parallel, concentric), interference check, bill of materials, STEP export |
-| **Desktop app** | Runs locally (Electron + Python); projects are plain JSON; STEP/STL export |
+| **Desktop app** | SolidWorks-style ribbon, FeatureManager tree, heads-up view toolbar, light and dark themes. Runs locally (Electron + Python); projects are plain JSON; STEP/STL export |
 
 | Constraint sketcher | Drawing → CAD, traceable |
 |---|---|

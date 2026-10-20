@@ -23,6 +23,7 @@ AI CAD is distributed under the GNU AGPL v3 (see `LICENSE`). It uses the followi
 | OpenAI Python SDK | 3.35.1 | Apache-2.0 | OpenAI-compatible providers |
 | React / React DOM | 19.x | MIT | user interface |
 | three.js | 0.171.0 | MIT | 3D viewport |
+| Lucide (lucide-react) | 0.468.0 | ISC | interface icons |
 | Electron | 33.2.1 | MIT (bundles Chromium, BSD-style and others) | desktop shell |
 
 The packaged desktop builds additionally include CPython from python-build-standalone (PSF licence and component licences). Full licence texts are shipped inside each package (`site-packages/*/LICENSE*`, `node_modules/*/LICENSE*`).
