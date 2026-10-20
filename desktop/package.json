@@ -1,0 +1,58 @@
+{
+  "name": "ai-cad-desktop",
+  "version": "0.3.0",
+  "private": true,
+  "description": "AI CAD desktop shell: runs the Python CAD backend and the workspace UI in one window",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --linux AppImage --publish never"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "author": {
+    "name": "AI CAD",
+    "email": "noreply@example.com"
+  },
+  "homepage": "https://example.com/ai-cad",
+  "build": {
+    "appId": "com.aicad.desktop",
+    "productName": "AI CAD",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../build/python",
+        "to": "python"
+      },
+      {
+        "from": "../build/app",
+        "to": "app"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Graphics",
+      "icon": "icon.png",
+      "executableName": "ai-cad",
+      "desktop": {
+        "Name": "AI CAD",
+        "Comment": "Parametric CAD with an AI design assistant",
+        "MimeType": "application/x-aicad;"
+      }
+    },
+    "asar": true
+  },
+  "license": "AGPL-3.0-or-later"
+}

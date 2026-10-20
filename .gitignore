@@ -1,0 +1,17 @@
+# environments and builds
+.venv/
+__pycache__/
+web/node_modules/
+web/dist/
+desktop/node_modules/
+desktop/dist/
+build/
+# machine-specific Claude Code config (generate with scripts/setup-claude-code.sh)
+.mcp.json
+# personal working files in the project root
+/*.aicad
+/*.aicadasm
+/*.step
+/*.stl
+/bracket.json
+/plate.json

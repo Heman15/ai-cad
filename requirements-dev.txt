@@ -1,0 +1,4 @@
+# development / UI tests
+pytest
+playwright
+httpx

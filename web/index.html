@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI CAD</title>
+  </head>
+  <body>
+    <div id="root"><p id="boot" style="font:16px system-ui;color:#ccc;padding:24px">Loading AI CAD…</p></div>
+    <script>
+      // Show startup errors on the page instead of a blank screen.
+      function showBootError(msg) {
+        var el = document.getElementById('boot-error') || document.body.appendChild(document.createElement('pre'));
+        el.id = 'boot-error';
+        el.style.cssText = 'position:fixed;left:16px;right:16px;bottom:16px;max-height:40vh;overflow:auto;z-index:99;background:#3a1717;color:#ffd7d7;padding:12px;border-radius:8px;font:13px monospace;white-space:pre-wrap';
+        el.textContent += msg + '\n';
+      }
+      window.addEventListener('error', function (e) { showBootError('Error: ' + (e.message || e) + (e.filename ? ' (' + e.filename + ':' + e.lineno + ')' : '')); });
+      window.addEventListener('unhandledrejection', function (e) { showBootError('Unhandled: ' + (e.reason && e.reason.message || e.reason)); });
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
