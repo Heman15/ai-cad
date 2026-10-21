@@ -235,6 +235,15 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
       if (path) { const r = await call<Result>('/api/asm/export', { path }); setStatus({ ok: r.ok, text: r.message }) }
     } else Object.assign(document.createElement('a'), { href: '/api/asm/export.step', download: 'assembly.step' }).click()
   }
+  const partsPackage = async () => {
+    if (!asm?.path) { setStatus({ ok: false, text: 'Save the assembly first: the parts package is built from its saved part files' }); return }
+    setStatus({ ok: true, text: 'Building the parts package: separating parts, rebuilding sheet metal, drawings… (can take a few minutes)' })
+    try {
+      const r = await call<{ folder: string; summary: Record<string, Json> }>('/api/parts/package', {})
+      const sm = Object.entries(r.summary).filter(([, v]) => typeof v === 'number').map(([k, v]) => `${v} ${k.replace(/_/g, ' ')}`).join(', ')
+      setStatus({ ok: true, text: `Parts package written to ${r.folder}${sm ? ` (${sm})` : ''}` })
+    } catch (e) { setStatus({ ok: false, text: (e as Error).message }) }
+  }
   const exportBom = async () => {
     if (desktop) {
       const path = await desktop.saveFileDialog(`${asm?.spec.name || 'assembly'}-bom.csv`, CSV)
@@ -507,6 +516,11 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
             <RibbonGroup label="Export">
               <RibbonButton icon={Download} label="Export STEP" title="The assembly as one STEP file (posed)" disabled={!has} onClick={exportStep} />
               <RibbonButton icon={FileSpreadsheet} label="BOM CSV" title="Bill of materials as a CSV file" disabled={!has} onClick={exportBom} />
+            </RibbonGroup>
+            <RibbonGroup label="Manufacturing">
+              <RibbonButton icon={Boxes} label="Parts Package" disabled={!has}
+                title="Separate every part, group identical ones, rebuild sheet-metal meshes as editable parts, and write a folder with part files, STEP, drawings, flat patterns and a BOM"
+                onClick={partsPackage} />
             </RibbonGroup>
           </>}
         </div>
