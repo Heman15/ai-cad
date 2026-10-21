@@ -5,6 +5,7 @@ Feature types and their params (lengths mm, angles degrees, any number may be "=
 
   extrude   plane, shapes, distance, op="add"|"cut", both=False, through=False
   revolve   plane, shapes, axis="u"|"v"|{origin:[u,v], dir:[du,dv]}, angle=360, op="add"|"cut"
+            (any added body: fuse_tol=<mm> fuses it fuzzily, for bodies that meet face to face, e.g. rebuilt sheet-metal bends)
   hole      plane, positions=[[u,v],...], diameter, depth=<mm>|"through",
             cbore_diameter, cbore_depth, csk_diameter, csk_angle=90
             Hole Wizard instead of diameter/cbore/csk/thread: standard="ISO", type="clearance"|"tapped"|"counterbore"|"countersink",
@@ -1207,9 +1208,9 @@ def _inside(inner: cq.BoundBox, outer: cq.BoundBox, tol: float = 0.05) -> bool:
     )
 
 
-def _apply(ctx: _Ctx, op: str, body: cq.Shape) -> None:
+def _apply(ctx: _Ctx, op: str, body: cq.Shape, fuse_tol: float | None = None) -> None:
     if op == "add":
-        ctx.shape = body if ctx.shape is None else ctx.shape.fuse(body).clean()
+        ctx.shape = body if ctx.shape is None else ctx.shape.fuse(body, tol=fuse_tol).clean()
     elif op == "cut":
         if ctx.shape is None:
             raise BuildError(f"{ctx.fid}: nothing to cut yet; the first feature must add material")
@@ -1223,7 +1224,7 @@ def _build_feature(ctx: _Ctx, f: Feature) -> None:
         _f_sketch(ctx, f.params)
     elif f.type in _TOOL_FEATURES:
         op, body = _TOOL_FEATURES[f.type](ctx, f.params)
-        _apply(ctx, op, body)
+        _apply(ctx, op, body, ctx.pos(f.params["fuse_tol"], "fuse_tol") if f.params.get("fuse_tol") else None)
         ctx.tools[f.id] = (op, body)
         ctx.order.append((f.id, body))
         _track_sheet_feature(ctx, f)

@@ -575,7 +575,7 @@ def _rebuild_sheet(mesh, name: str) -> dict[str, Any]:
             continue
         features.append({"id": f"flange_{k}", "type": "extrude", "params": {
             "plane": {"origin": [_p(c) for c in f["origin"]], "normal": [_p(c) for c in -f["n"]], "xdir": [_p(c) for c in f["x"]]},
-            "shapes": shapes, "distance": "=thickness"}})
+            "shapes": shapes, "distance": "=thickness", **({"fuse_tol": 1e-3} if features else {})}})
     radius_vars: dict[float, str] = {}
     bend_report = []
     nb = 0
@@ -598,7 +598,7 @@ def _rebuild_sheet(mesh, name: str) -> dict[str, Any]:
             features.append({"id": f"bend_{nb}", "type": "revolve", "params": {
                 "plane": {"origin": [_p(c) for c in origin], "normal": [_p(c) for c in normal], "xdir": [_p(c) for c in a]},
                 "shapes": [{"type": "rect", "w": _p(hi - lo), "h": "=thickness", "x": 0, "y": f"={rv}", "centered": False}],
-                "axis": "u", "angle": _p(b["sign"] * b["theta"])}})
+                "axis": "u", "angle": _p(b["sign"] * b["theta"]), "fuse_tol": 1e-3}})
     spec = {"spec_version": 2, "name": name, "variables": variables, "limits": {"thickness": {"min": 0.1}}, "features": features,
             "units": "mm", "source": {"type": "reverse_engineered", "note": "rebuilt from a mesh as sheet metal; verify before manufacture"}}
     report = {"kind": "sheet_metal", "thickness": round(t, 3), "flanges": len(fl), "bends": bend_report,
@@ -887,9 +887,10 @@ def flat_pattern(rb: dict[str, Any], k_factor: float = K_FACTOR) -> dict[str, An
             l2 = [(P @ [s, -ba, 1])[:2].tolist() for s in (lo, hi)]
             lines.append({"line": l1, "line2": l2, "label": f"{direction} {b['theta']:.1f}° R{b['r']:.2f}", "allowance": ba})
     geoms = list(pieces.values())
+    shrunk = [g.buffer(-0.01, join_style=2) for g in geoms]
     for i in range(len(geoms)):
         for j in range(i + 1, len(geoms)):
-            ov = geoms[i].intersection(geoms[j]).area
+            ov = shrunk[i].intersection(shrunk[j]).area  # shrunk: shared edges never count as overlap
             if ov > 0.01 * min(geoms[i].area, geoms[j].area) + 0.05:
                 raise ValueError("flanges overlap each other when unfolded")
     outline = union_all([p.buffer(1e-3, join_style=2) for p in geoms]).buffer(-1e-3, join_style=2)
