@@ -659,7 +659,7 @@ def _local_entities(path: str, shape) -> dict[str, Any]:
         center = ((V.min(0) + V.max(0)) / 2).round(4).tolist()
         out = {"faces": [{"index": 0, "type": "MESH", "point": center, "area": None, "center": center,
                           "vertices": V.round(4).ravel().tolist(), "triangles": F.ravel().tolist()}],
-               "edges": []}
+               "edges": [], "vertices": []}
         _ASM_MESH_CACHE[key] = out
         return out
     faces = []
@@ -671,7 +671,8 @@ def _local_entities(path: str, shape) -> dict[str, Any]:
     for e in shape.Edges():
         pts = [e.startPoint(), e.endPoint()] if e.geomType() == "LINE" else [e.positionAt(k / 24) for k in range(25)]
         edges.append({**_edge_info(e), "polyline": [c for q in pts for c in q.toTuple()]})
-    out = {"faces": faces, "edges": edges}
+    vertices = [list(v.toTuple()) for v in shape.Vertices()]
+    out = {"faces": faces, "edges": edges, "vertices": vertices}
     _ASM_MESH_CACHE[key] = out
     return out
 
@@ -682,11 +683,11 @@ def asm_snapshot() -> dict[str, Any]:
     from cadcore.assembly import CACHE, resolve_path, rotation_matrix
 
     a = _asm()
-    comps, faces, edges = [], [], []
+    comps, faces, edges, vertices = [], [], [], []
     for c in a.spec.components:
         path = resolve_path(a.path, c.file)
         entry = {"id": c.id, "file": c.file, "fixed": c.fixed, "position": c.position, "rotation": c.rotation,
-                 "link": c.link, "color": c.color}
+                 "link": c.link, "color": c.color, "hidden": c.hidden, "transparent": c.transparent}
         try:
             info = CACHE.load(path)
         except Exception as e:  # missing or broken part file: report, keep the rest working
@@ -701,15 +702,19 @@ def asm_snapshot() -> dict[str, Any]:
             faces.append({**f, "index": len(faces), "feature": c.id, "component": c.id, "color": c.color,
                           "local_point": f["point"], "local_normal": f.get("normal"),
                           "point": tf(f["point"]), "normal": (np.asarray(f["normal"]) @ R.T).round(6).tolist() if f.get("normal") else None,
-                          "vertices": tf(f["vertices"])})
+                          "center": tf(f["center"]), "vertices": tf(f["vertices"]),
+                          **({"axis_point": tf(f["axis_point"]), "axis_dir": (np.asarray(f["axis_dir"]) @ R.T).round(6).tolist()} if f.get("axis_dir") else {})})
         for e in local["edges"]:
-            edges.append({**e, "index": len(edges), "feature": c.id, "component": c.id, "point": tf(e["point"]), "polyline": tf(e["polyline"])})
+            edges.append({**e, "index": len(edges), "feature": c.id, "component": c.id, "local_point": e["point"], "point": tf(e["point"]),
+                          "polyline": tf(e["polyline"])})
+        for v in local.get("vertices", []):
+            vertices.append({"index": len(vertices), "component": c.id, "local_point": v, "point": tf(v)})
     try:
         bom = a.bom()
     except Exception:
         bom = []
     return {"spec": a.spec.to_dict(), "path": a.path, "status": a.status, "can_undo": bool(a._undo), "can_redo": bool(a._redo),
-            "components": comps, "entities": {"faces": faces, "edges": edges} if faces else None, "bom": bom}
+            "components": comps, "entities": {"faces": faces, "edges": edges, "vertices": vertices} if faces else None, "bom": bom}
 
 
 @app.get("/api/asm")
@@ -843,6 +848,42 @@ def asm_save(body: PathIn):
     with LOCK:
         _asm().save(str(path))
         return {"ok": True, "path": str(path), "model": asm_snapshot()}
+
+
+@app.post("/api/asm/measure")
+def asm_measure(body: RefsIn):
+    """Measure faces, edges or vertices of components, in assembly (world) coordinates."""
+    from cadcore.mesh import ShapeResult, measure_pairs
+
+    with LOCK:
+        world = _asm().world_shapes()
+        pairs = []
+        for r in body.refs:
+            if r.get("component") not in world:
+                raise HTTPException(400, "each measured entity must belong to a component")
+            pairs.append((ShapeResult(world[r["component"]]), r))
+        return measure_pairs(pairs)
+
+
+@app.get("/api/asm/mass")
+def asm_mass():
+    with LOCK:
+        return _asm().mass_properties()
+
+
+@app.get("/api/asm/bom.csv")
+def asm_bom_csv():
+    with LOCK:
+        data = _asm().bom_csv()
+    return Response(data, media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="bom.csv"'})
+
+
+@app.post("/api/asm/export_bom")
+def asm_export_bom(body: PathIn):
+    path = Path(body.path).expanduser()
+    with LOCK:
+        path.write_text(_asm().bom_csv())
+    return {"ok": True, "message": f"bill of materials saved to {path}"}
 
 
 @app.post("/api/asm/interference")
