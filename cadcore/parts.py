@@ -521,7 +521,7 @@ def make_package(source: str | Path | list[tuple[str, Any]], out_dir: str | Path
     for i, g in enumerate(groups, 1):
         g.pn = f"PN-{i:0{width}d}"
         first = g.rep.used_in[0].split(" (")[0]
-        g.name = f"{_safe(first)} body {_fmt_size(g.rep.size).replace(' x ', 'x')}"
+        g.name = f"{_safe(first)[:24]} " + "x".join(f"{v:.0f}" for v in sorted(g.rep.size, reverse=True))
     for n, g in enumerate(groups, 1):
         say(f"recognising part {n} of {len(groups)}")
         classify(g, purchased_min_qty)

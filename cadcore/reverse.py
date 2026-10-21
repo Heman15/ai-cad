@@ -25,6 +25,7 @@ fillets in more than one direction.
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -736,13 +737,14 @@ def _ray_hits(tris: np.ndarray, gx: np.ndarray, gy: np.ndarray) -> tuple[np.ndar
 def compare_volumes(tris_a: np.ndarray, tris_b: np.ndarray, rays: int = 250000) -> dict[str, float]:
     """Volumes of two closed triangle sets and of their symmetric difference, by casting a dense grid of parallel
     rays (exact along each ray; no booleans, so faces lying on each other are no problem)."""
-    allp = np.concatenate([tris_a.reshape(-1, 3), tris_b.reshape(-1, 3)])
-    # rays along the thinnest extent: fewest triangles per ray
-    ext = allp.max(0) - allp.min(0)
-    ax = int(np.argmin(ext))
-    perm = [(ax + 1) % 3, (ax + 2) % 3, ax]
-    A, B = tris_a[..., perm], tris_b[..., perm]
-    lo, hi = allp[:, perm].min(0), allp[:, perm].max(0)
+    # rays in a skew direction: walls parallel to the rays would be sampled in whole rays (a biased volume)
+    k = _unit(np.array([0.31, 0.53, 0.79]))
+    th = 0.37
+    Kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    Rot = np.eye(3) + math.sin(th) * Kx + (1 - math.cos(th)) * Kx @ Kx
+    A, B = tris_a @ Rot.T, tris_b @ Rot.T
+    allp = np.concatenate([A.reshape(-1, 3), B.reshape(-1, 3)])
+    lo, hi = allp.min(0), allp.max(0)
     pitch = math.sqrt((hi[0] - lo[0]) * (hi[1] - lo[1]) / rays) or 0.01
     rng = np.random.default_rng(7)  # jitter: rays never run exactly along mesh edges
     gx = np.arange(lo[0] + pitch * (0.5 + 0.01 * rng.random()), hi[0], pitch)
@@ -803,6 +805,17 @@ def validate(spec: dict[str, Any], mesh) -> dict[str, Any]:
             "ray_pitch_mm": round(cmp["pitch"], 4), "project": p}
 
 
+def _set_fuse_tol(spec: dict[str, Any], tol: float | None) -> dict[str, Any]:
+    out = json.loads(json.dumps(spec))
+    for f in out["features"]:
+        if "fuse_tol" in f["params"]:
+            if tol is None:
+                del f["params"]["fuse_tol"]
+            else:
+                f["params"]["fuse_tol"] = tol
+    return out
+
+
 def rebuild(mesh, name: str = "part") -> dict[str, Any]:
     """Parametric PartSpec for a closed mesh (mm), validated against it.
 
@@ -822,6 +835,15 @@ def rebuild(mesh, name: str = "part") -> dict[str, Any]:
             reasons.append(r["reason"])
             continue
         v = validate(r["spec"], mesh)
+        # OCC fuses faces that meet exactly with or without fuzz, case by case: on a failed build (or a degenerate
+        # result) try the other settings and keep the best
+        for tol in (None, 1e-4, 1e-2):
+            if v["ok"] or "fuse_tol" not in json.dumps(r["spec"]):
+                break
+            spec = _set_fuse_tol(r["spec"], tol)
+            v2 = validate(spec, mesh)
+            if v2.get("mismatch_pct") is not None and (v.get("mismatch_pct") is None or v2["mismatch_pct"] < v["mismatch_pct"]):
+                r["spec"], v = spec, v2
         r["report"]["mismatch_pct"] = v.get("mismatch_pct")
         if v["ok"]:
             r.update(mismatch_pct=v["mismatch_pct"], volume_diff_pct=v["volume_diff_pct"], project=v["project"])
