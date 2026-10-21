@@ -11,7 +11,9 @@ Model:
 Flat pattern: every flange unfolds to bend allowance BA = θ·(R + K·T) plus its length L,
 attached to the base edge. Holes and through-cuts in the base are included.
 
-Supported: flanges on edges of the base flange only (one bend level). Anything else,
+Hems are 180° flanges folded back over the sheet (open: inner radius = gap/2; closed: a 0.02 mm gap).
+
+Supported: flanges and hems on edges of the base flange only (one bend level). Anything else,
 such as a cut through a flange or a flange on a flange, makes the flat pattern refuse to
 compute and explain why; it never produces a wrong flat.
 """
@@ -37,6 +39,7 @@ class FlangeInfo:
     up: bool
     body: cq.Shape
     edge_on_top: bool
+    kind: str = "flange"  # or "hem" (180° fold)
 
 
 @dataclass
@@ -59,6 +62,9 @@ class SheetState:
 
     def h(self, p: cq.Vector) -> float:
         return (p - self.origin).dot(self.n)
+
+
+CLOSED_HEM_GAP = 0.02  # mm: a closed hem keeps this gap (inner radius 0.01) so the folded layer stays a valid solid
 
 
 def bend_allowance(angle_deg: float, R: float, K: float, T: float) -> float:
@@ -149,7 +155,7 @@ def flat_pattern(st: SheetState) -> dict[str, Any]:
             pts.reverse()  # counter-clockwise, so the face normal matches the base and the union merges
         rect = cq.Face.makeFromWires(cq.Wire.makePolygon(pts, close=True))
         sk.face(rect)
-        label = f"{'UP' if fl.up else 'DOWN'} {fl.angle:g}° R{fl.radius:g}"
+        label = f"{'HEM ' if fl.kind == 'hem' else ''}{'UP' if fl.up else 'DOWN'} {fl.angle:g}° R{fl.radius:g}"
         bends.append({"feature": fl.feature, "start": [(ua + mu * 0).x, (ua).y], "line": [[ua.x, ua.y], [ub.x, ub.y]],
                       "line2": [[(ua + mu * ba).x, (ua + mu * ba).y], [(ub + mu * ba).x, (ub + mu * ba).y]], "label": label,
                       "allowance": ba})

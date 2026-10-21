@@ -291,8 +291,8 @@ class Project:
             if len(coords) != 2:
                 raise CommandError("give positions=[[u,v],...] or exactly two of x, y, z (the in-plane coordinates)")
             positions = [coords]
-        if diameter is None and not extra.get("thread"):
-            raise CommandError("give a diameter, or a thread like 'M8' (the tap drill diameter is then used)")
+        if diameter is None and not extra.get("thread") and not extra.get("standard"):
+            raise CommandError("give a diameter, a thread like 'M8', or a Hole Wizard standard/type/size (e.g. ISO counterbore M6)")
         params = {"plane": plane, "depth": depth, "positions": positions, **extra}
         if diameter is not None:
             params["diameter"] = diameter

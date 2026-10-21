@@ -7,7 +7,23 @@ Feature types and their params (lengths mm, angles degrees, any number may be "=
   revolve   plane, shapes, axis="u"|"v"|{origin:[u,v], dir:[du,dv]}, angle=360, op="add"|"cut"
   hole      plane, positions=[[u,v],...], diameter, depth=<mm>|"through",
             cbore_diameter, cbore_depth, csk_diameter, csk_angle=90
+            Hole Wizard instead of diameter/cbore/csk/thread: standard="ISO", type="clearance"|"tapped"|"counterbore"|"countersink",
+            size="M6" (tapped also "M8x1"), fit="close"|"normal"|"loose" (ISO 273 clearance; counterbore for ISO 4762
+            socket head cap screws, countersink 90° for ISO 10642; tapped = tap drill + cosmetic thread, thread_depth optional)
   fillet    edges, radius
+  variable_fillet  edge={"near": [x,y,z]} (exactly one edge), r1 (at the start), r2 (at the end),
+            start=[x,y,z] (which end gets r1; default the edge's first vertex), points=[[t, r], ...] (radius r at
+            fraction t in (0,1) along the edge from the start; optional), reverse (swap the ends)
+  draft     faces (selector like "#Z", {"near": [pts]} or [{point, normal}, ...]), angle (degrees, 0 < |angle| <= 45),
+            neutral_plane (plane; default "XY"; faces keep their size there), pull=[x,y,z] (default: the neutral plane's
+            normal, or into the part for a face), flip. A positive angle narrows the part along the pull direction.
+            Faces perpendicular to the pull, or that the kernel cannot taper, are reported by position.
+  rib       sketch="<id>" (open lines, path_only) | plane + points=[[u,v],...], thickness,
+            direction="parallel" (default: thickness across the sketch plane, material filled in the plane between
+            the line and the part; open ends are extended along the line until they meet the part)
+            | "normal" (thickness in the plane around the line, extruded along the plane normal until it meets the part),
+            side="both"|"first"|"second" (parallel: first = toward the plane's normal; normal: first = left of the line),
+            flip (when both sides of the line are enclosed, take the larger region). Fails if it does not reach material.
   chamfer   edges, distance
   shell     faces, thickness            (removes the selected faces, hollows inward)
   pattern_linear    feature, count, step=[dx,dy,dz], count2=1, step2=[dx,dy,dz]
@@ -21,6 +37,9 @@ Feature types and their params (lengths mm, angles degrees, any number may be "=
   sheet_base    plane + shapes | sketch: base flange extruded to the sheet thickness (needs set_sheet_metal first)
   sheet_flange  edge={"near": [x,y,z]} straight edge of the base, length (flat part after the bend), angle=90,
                 direction="up"|"down", bend_radius (default: sheet), trim_start/trim_end (corner relief)
+  sheet_hem     edge={"near": [x,y,z]} straight edge of the base, length (flat return after the fold), type="closed"|"open",
+                gap (open hem: inside gap = twice the inner radius), direction="up"|"down", trim_start/trim_end. A 180° fold;
+                a closed hem keeps a 0.02 mm gap so both layers stay one valid solid. Unfolds in the flat pattern.
   sketch    plane, points, entities, constraints   (constraint-solved 2D sketch; see sketch.py)
             extrude/revolve take "sketch": "<sketch id>" instead of plane + shapes
 
@@ -56,6 +75,7 @@ from typing import Any, Callable
 import cadquery as cq
 
 from .expr import ExprError, convert_units, evaluate, names_in
+from . import holes as _holes
 from . import sheetmetal as _sm
 from . import threads as _threads
 from .sketch import SketchError, path_wire, profile_faces, solve
@@ -77,6 +97,7 @@ class HoleInfo:
     csk: tuple[float, float] | None = None
     thread: str | None = None  # e.g. "M8×1.25" (tapped hole; diameter is the tap drill)
     thread_depth: float | None = None
+    standard: str | None = None  # Hole Wizard description, e.g. "M6 ISO 4762 C'BORE"
 
 
 @dataclass
@@ -185,6 +206,8 @@ class _Ctx:
                 raise BuildError("sheet.k_factor must be between 0 and 0.5")
         self.sketches: dict[str, tuple[PlaneInfo, list[cq.Face], dict[str, Any]]] = {}
         self.sketch_data: dict[str, tuple[dict[str, Any], Any]] = {}  # sketch id -> (params, solve result)
+        # sketches that may be open lines (used by ribs)
+        self.open_sketches = {f.params.get("sketch") for f in spec.features if f.type == "rib" and not f.suppressed}
         self.fid = ""
 
     def num(self, value: Any, what: str) -> float:
@@ -411,7 +434,7 @@ def _f_sketch(ctx: _Ctx, p: dict) -> None:
     try:
         faces = profile_faces(p, sol)
     except SketchError as e:
-        if not p.get("path_only"):
+        if not (p.get("path_only") or ctx.fid in ctx.open_sketches):
             raise BuildError(f"{ctx.fid}: {e} (set path_only for sketches used as sweep paths)")
         faces = []
     loc = pl.cq_plane.location
@@ -463,6 +486,12 @@ def _f_revolve(ctx: _Ctx, p: dict) -> tuple[str, cq.Shape]:
 
 def _f_hole(ctx: _Ctx, p: dict) -> tuple[str, cq.Shape]:
     pl = _plane(ctx, p.get("plane", {"face": ">Z"}))
+    standard = None
+    if p.get("standard") is not None:  # Hole Wizard: sizes come from the ISO tables
+        try:
+            p, standard = _holes.expand(p), _holes.label(p)
+        except ValueError as e:
+            raise BuildError(f"{ctx.fid}: {e}")
     thread = None
     if p.get("thread"):
         try:
@@ -510,7 +539,11 @@ def _f_hole(ctx: _Ctx, p: dict) -> tuple[str, cq.Shape]:
             body = body.fuse(cq.Solid.makeCone(cs[0] / 2 + _EPS, 0, h + _EPS, top, direction))
         bodies.append(body)
     tdepth = ctx.pos(p["thread_depth"], "thread_depth") if thread and p.get("thread_depth") is not None else None
-    ctx.holes.append(HoleInfo(ctx.fid, dia, depth, points, direction, cb, cs, thread, tdepth))
+    if tdepth is not None and depth is not None and tdepth > depth + 1e-9:
+        raise BuildError(f"{ctx.fid}.thread_depth {tdepth:g} is deeper than the hole depth {depth:g}")
+    if cb and depth is not None and cb[1] >= depth:
+        raise BuildError(f"{ctx.fid}: counterbore depth {cb[1]:g} must be less than the hole depth {depth:g}")
+    ctx.holes.append(HoleInfo(ctx.fid, dia, depth, points, direction, cb, cs, thread, tdepth, standard))
     return "cut", _one(bodies)
 
 
@@ -539,7 +572,7 @@ def _source(ctx: _Ctx, p: dict) -> tuple[str, cq.Shape, list[HoleInfo]]:
 def _copy_holes(ctx: _Ctx, holes: list[HoleInfo], fn: Callable[[cq.Vector], cq.Vector], dir_fn: Callable[[cq.Vector], cq.Vector]):
     for h in holes:
         ctx.holes.append(HoleInfo(ctx.fid, h.diameter, h.depth, [fn(pt) for pt in h.points], dir_fn(h.direction),
-                                  h.cbore, h.csk, h.thread, h.thread_depth))
+                                  h.cbore, h.csk, h.thread, h.thread_depth, h.standard))
 
 
 def _rot(v: cq.Vector, axis: cq.Vector, deg: float) -> cq.Vector:
@@ -750,7 +783,7 @@ def _f_sheet_flange(ctx: _Ctx, p: dict) -> tuple[str, cq.Shape]:
 def _track_sheet_feature(ctx: _Ctx, f: Feature) -> None:
     """Record what the flat pattern can represent: holes/through-cuts normal to the base inside the base."""
     st = ctx.sheet
-    if st is None or not st.base_faces_uv or f.type in ("sheet_base", "sheet_flange", "sketch"):
+    if st is None or not st.base_faces_uv or f.type in ("sheet_base", "sheet_flange", "sheet_hem", "sketch"):
         return
     if f.type in ("hole", "extrude") and (f.type == "hole" or f.params.get("op") == "cut"):
         op_body = ctx.tools.get(f.id, (None, None))[1]
@@ -844,12 +877,325 @@ def _f_shell(ctx: _Ctx, p: dict) -> None:
         raise BuildError(f"{ctx.fid}: shell with wall {t:g} failed; try a thinner wall")
 
 
+def _faces_ref(ctx: _Ctx, sel: Any) -> list[cq.Face]:
+    """Faces by selector, {"near": [points]}, or a list of {point, normal} references (picked faces)."""
+    if isinstance(sel, list) and sel and all(isinstance(r, dict) for r in sel):
+        found = []
+        for i, ref in enumerate(sel):
+            pt = ctx.vec(ref.get("point"), f"faces[{i}].point")
+            nrm = ctx.vec(ref["normal"], f"faces[{i}].normal").normalized() if ref.get("normal") is not None else None
+            v = cq.Vertex.makeVertex(*pt.toTuple())
+            hits = [f for f in ctx.shape.Faces() if f.distance(v) < _REF_TOL
+                    and (nrm is None or f.normalAt(_closest_on(f, pt)).normalized().dot(nrm) > 0.999)]
+            if not hits:
+                raise BuildError(f"{ctx.fid}.faces[{i}] at {list(pt.toTuple())}: the referenced face no longer exists; re-select it")
+            if hits[0] not in found:
+                found.append(hits[0])
+        return found
+    return [f for f in _select(ctx, sel, "faces")]
+
+
+def _closest_on(shape: cq.Shape, pt: cq.Vector) -> cq.Vector:
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    ext = BRepExtrema_DistShapeShape(cq.Vertex.makeVertex(*pt.toTuple()).wrapped, shape.wrapped)
+    q = ext.PointOnShape2(1)
+    return cq.Vector(q.X(), q.Y(), q.Z())
+
+
+def _where(f: cq.Shape) -> str:
+    return f"{f.geomType()} face at [{', '.join(f'{round(c, 4) + 0.0:g}' for c in f.Center().toTuple())}]"
+
+
+def _f_draft(ctx: _Ctx, p: dict) -> None:
+    """Taper faces by an angle about a neutral plane (OCC BRepOffsetAPI_DraftAngle)."""
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_DraftAngle
+    from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
+
+    angle = ctx.num(p.get("angle"), "angle")
+    if angle == 0 or abs(angle) > 45:
+        raise BuildError(f"{ctx.fid}.angle must be between -45 and 45 degrees and not 0, got {angle:g}")
+    pl = _plane(ctx, p.get("neutral_plane", "XY"))
+    if p.get("pull") is not None:
+        pull = ctx.vec(p["pull"], "pull")
+        if pull.Length < 1e-9:
+            raise BuildError(f"{ctx.fid}.pull must not be zero")
+        pull = pull.normalized()
+    else:  # base/custom plane: its normal; face plane: into the part
+        pull = pl.normal * (-1 if pl.outward else 1)
+    if p.get("flip"):
+        pull = -pull
+    normal = pl.xdir.cross(pl.ydir)
+    if abs(normal.dot(pull)) < 1e-6:
+        raise BuildError(f"{ctx.fid}.pull lies in the neutral plane; it must cross it")
+    faces = _faces_ref(ctx, p.get("faces"))
+    for f in faces:
+        if f.geomType() == "PLANE" and abs(f.normalAt().normalized().dot(pull)) > 1 - 1e-9:
+            raise BuildError(f"{ctx.fid}: {_where(f)} is perpendicular to the pull direction and cannot be drafted")
+    plane = gp_Pln(gp_Pnt(*pl.origin.toTuple()), gp_Dir(*normal.toTuple()))
+    bad = []
+    for f in faces:  # each face on its own first, so every face that cannot be tapered is reported
+        probe = BRepOffsetAPI_DraftAngle(ctx.shape.wrapped)
+        probe.Add(f.wrapped, gp_Dir(*pull.toTuple()), math.radians(angle), plane, True)
+        if not probe.AddDone():
+            bad.append(_where(f))
+    if bad:
+        raise BuildError(f"{ctx.fid}: cannot draft {len(bad)} of {len(faces)} face(s): {'; '.join(bad)} "
+                         "(the kernel cannot taper them about this neutral plane and pull direction)")
+    mk = BRepOffsetAPI_DraftAngle(ctx.shape.wrapped)
+    for f in faces:
+        mk.Add(f.wrapped, gp_Dir(*pull.toTuple()), math.radians(angle), plane, True)
+        if not mk.AddDone():
+            raise BuildError(f"{ctx.fid}: {_where(f)} cannot be drafted together with the other faces; draft it in a separate feature")
+    mk.Build()
+    if not mk.IsDone():
+        raise BuildError(f"{ctx.fid}: draft of {len(faces)} face(s) by {angle:g}° failed in the kernel; try a smaller angle")
+    out = cq.Shape.cast(mk.Shape())
+    if not out.isValid() or not out.Solids():
+        raise BuildError(f"{ctx.fid}: draft produced invalid geometry; try a smaller angle or fewer faces")
+    ctx.shape = out
+
+
+def _f_variable_fillet(ctx: _Ctx, p: dict) -> None:
+    """Fillet one edge with a radius varying from r1 (start) to r2 (end), optionally through intermediate radii."""
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+    from OCP.gp import gp_Pnt2d
+    from OCP.TColgp import TColgp_Array1OfPnt2d
+
+    sel = p.get("edge")
+    if isinstance(sel, dict) and isinstance(sel.get("near"), list) and sel["near"] and not isinstance(sel["near"][0], list):
+        sel = {"near": [sel["near"]]}  # a single point
+    edges = _select(ctx, sel, "edges")
+    if len(edges) != 1:
+        raise BuildError(f"{ctx.fid}.edge must name exactly one edge, matched {len(edges)}")
+    r1, r2 = ctx.pos(p.get("r1"), "r1"), ctx.pos(p.get("r2"), "r2")
+    law = [(0.0, r1)]
+    for i, q in enumerate(p.get("points") or []):
+        if not isinstance(q, (list, tuple)) or len(q) != 2:
+            raise BuildError(f"{ctx.fid}.points[{i}] must be [t, radius] with t in (0, 1) along the edge")
+        t, r = ctx.num(q[0], f"points[{i}][0]"), ctx.pos(q[1], f"points[{i}][1]")
+        if not law[-1][0] < t < 1:
+            raise BuildError(f"{ctx.fid}.points: t values must increase strictly between 0 and 1")
+        law.append((t, r))
+    law.append((1.0, r2))
+    mk = BRepFilletAPI_MakeFillet(ctx.shape.wrapped)
+    mk.Add(edges[0].wrapped)
+    first = BRep_Tool.Pnt_s(mk.FirstVertex(1))
+    last = BRep_Tool.Pnt_s(mk.LastVertex(1))
+    if p.get("start") is not None:  # r1 belongs to the end nearest to `start`
+        s = ctx.vec(p["start"], "start")
+        d_first = (cq.Vector(first.X(), first.Y(), first.Z()) - s).Length
+        d_last = (cq.Vector(last.X(), last.Y(), last.Z()) - s).Length
+        if d_last < d_first:
+            law = [(1 - t, r) for t, r in reversed(law)]
+    if p.get("reverse"):  # swap the ends
+        law = [(1 - t, r) for t, r in reversed(law)]
+    if len(law) == 2:
+        mk.SetRadius(law[0][1], law[1][1], 1, 1)
+    else:
+        arr = TColgp_Array1OfPnt2d(1, len(law))
+        for i, (t, r) in enumerate(law):
+            arr.SetValue(i + 1, gp_Pnt2d(t, r))
+        mk.SetRadius(arr, 1, 1)
+    try:
+        mk.Build()
+        ok = mk.IsDone()
+    except Exception:
+        ok = False
+    out = cq.Shape.cast(mk.Shape()) if ok else None
+    if out is None or not out.isValid() or not out.Solids():
+        raise BuildError(f"{ctx.fid}: variable fillet {r1:g}→{r2:g} failed on the edge; try smaller radii")
+    ctx.shape = out
+
+
+def _chain_points(edges: list[cq.Edge]) -> list[cq.Vector]:
+    """Ordered points of a connected chain of straight edges (open polyline)."""
+    if any(e.geomType() != "LINE" for e in edges):
+        raise ValueError("rib sketches must contain straight lines only")
+    segs = [(e.startPoint(), e.endPoint()) for e in edges]
+    pts = list(segs.pop(0))
+    while segs:
+        for i, (a, b) in enumerate(segs):
+            if (a - pts[-1]).Length < 1e-6:
+                pts.append(b)
+            elif (b - pts[-1]).Length < 1e-6:
+                pts.append(a)
+            elif (b - pts[0]).Length < 1e-6:
+                pts.insert(0, a)
+            elif (a - pts[0]).Length < 1e-6:
+                pts.insert(0, b)
+            else:
+                continue
+            segs.pop(i)
+            break
+        else:
+            raise ValueError("the rib lines must form one connected chain")
+    if (pts[0] - pts[-1]).Length < 1e-6:
+        raise ValueError("the rib sketch must be an open line, not a closed loop")
+    return pts
+
+
+def _offset_polyline(uv: list[tuple[float, float]], left: float, right: float) -> list[tuple[float, float]]:
+    """Closed outline around a 2D polyline: `left` mm to its left and `right` mm to its right (mitred corners)."""
+    def side(dist: float) -> list[tuple[float, float]]:
+        lines = []
+        for (x0, y0), (x1, y1) in zip(uv, uv[1:]):
+            dx, dy = x1 - x0, y1 - y0
+            ln = math.hypot(dx, dy)
+            nx, ny = -dy / ln * dist, dx / ln * dist
+            lines.append(((x0 + nx, y0 + ny), (x1 + nx, y1 + ny)))
+        out = [lines[0][0]]
+        for (a0, a1), (b0, b1) in zip(lines, lines[1:]):
+            d1 = (a1[0] - a0[0], a1[1] - a0[1])
+            d2 = (b1[0] - b0[0], b1[1] - b0[1])
+            den = d1[0] * d2[1] - d1[1] * d2[0]
+            if abs(den) < 1e-12:
+                out.append(a1)
+                continue
+            t = ((b0[0] - a0[0]) * d2[1] - (b0[1] - a0[1]) * d2[0]) / den
+            out.append((a0[0] + d1[0] * t, a0[1] + d1[1] * t))
+        out.append(lines[-1][1])
+        return out
+    return side(left) + list(reversed(side(-right)))
+
+
+def _rib_piece(ctx: _Ctx, tool: cq.Shape, probe: cq.Vector, axis: cq.Vector, origin: cq.Vector, reach: float):
+    """The part of `tool` outside the body that contains `probe`, if it is closed off by material before `reach`."""
+    pieces = [s_ for s_ in tool.cut(ctx.shape).Solids() if s_.isInside(probe, 1e-6)]
+    if not pieces:
+        return None
+    piece = pieces[0]
+    far = max((v.Center() - origin).dot(axis) for v in piece.Vertices())
+    return piece if far < reach * 0.999 else None
+
+
+def _f_rib(ctx: _Ctx, p: dict) -> tuple[str, cq.Shape]:
+    """Thin wall from an open sketch line, extended to the existing material (like a SolidWorks rib)."""
+    if ctx.shape is None:
+        raise BuildError(f"{ctx.fid}: a rib needs an existing solid to reach")
+    t = ctx.pos(p.get("thickness"), "thickness")
+    side = p.get("side", "both")
+    if side not in ("both", "first", "second"):
+        raise BuildError(f"{ctx.fid}.side must be both, first or second")
+    mode = p.get("direction", "parallel")
+    if mode not in ("parallel", "normal"):
+        raise BuildError(f"{ctx.fid}.direction must be parallel or normal")
+    try:
+        if "sketch" in p:
+            ref = p["sketch"]
+            if ref not in ctx.sketch_data:
+                raise BuildError(f"{ctx.fid}.sketch must name an earlier sketch, got {ref!r}")
+            params, sol = ctx.sketch_data[ref]
+            pl = ctx.sketches[ref][0]
+            local = _chain_points(path_wire(params, sol).Edges())
+            uv = [(q.x, q.y) for q in local]
+        else:
+            pl = _plane(ctx, p.get("plane"))
+            raw = p.get("points") or []
+            if len(raw) < 2:
+                raise BuildError(f"{ctx.fid}.points needs at least 2 [u, v] points (an open line)")
+            uv = [(ctx.num(a, f"points[{i}][0]"), ctx.num(b, f"points[{i}][1]")) for i, (a, b) in enumerate(raw)]
+            _chain_points([cq.Edge.makeLine(cq.Vector(*a, 0), cq.Vector(*b, 0)) for a, b in zip(uv, uv[1:])])
+    except (SketchError, ValueError) as e:
+        raise BuildError(f"{ctx.fid}: {e}")
+    if any(math.dist(a, b) < 1e-6 for a, b in zip(uv, uv[1:])):
+        raise BuildError(f"{ctx.fid}: the rib line has a zero-length segment")
+    n = pl.normal.normalized()  # "first" side: toward the plane's positive / outward normal
+    reach = 2 * ctx.diag
+    solid = ctx.shape.Solids()[0] if ctx.shape.Solids() else ctx.shape
+    ok = lambda q: solid.isInside(q, 1e-4)  # noqa: E731
+
+    if mode == "parallel":
+        # extend open ends along their segments until they meet material (as a rib sketch is extended)
+        for end in (0, -1):
+            a, b = (uv[1], uv[0]) if end == 0 else (uv[-2], uv[-1])
+            pa, pb = pl.point(*a), pl.point(*b)
+            if ok(pb):
+                continue
+            ray = cq.Edge.makeLine(pb, pb + (pb - pa).normalized() * reach)
+            hits = [v.Center() for v in solid.intersect(ray).Vertices()]
+            if not hits:
+                raise BuildError(f"{ctx.fid}: the rib line end at {[round(c, 4) for c in pb.toTuple()]} does not reach the "
+                                 "part when extended; move it onto (or toward) the material")
+            q = min(hits, key=lambda h: (h - pb).Length)
+            ext = pl.to_uv(q)
+            uv[end] = ext
+        z0 = {"both": -t / 2, "first": 0.0, "second": -t}[side]
+        pts3 = [pl.point(*q) + n * z0 for q in uv]
+        chord = (pts3[-1] - pts3[0])
+        candidates = []
+        for s in (1, -1):
+            m = n.cross(chord).normalized() * s
+            region = cq.Face.makeFromWires(cq.Wire.makePolygon(pts3 + [pts3[-1] + m * reach, pts3[0] + m * reach], close=True))
+            slab = cq.Solid.extrudeLinear(region, n * t)
+            a, b = pts3[0], pts3[1]
+            probe = (a + b) * 0.5 + n * (t / 2) + m * min(0.05, t / 4)
+            piece = _rib_piece(ctx, slab, probe, m, pts3[0], reach)
+            if piece is not None:
+                candidates.append(piece)
+    else:
+        lo, hi = {"both": (t / 2, t / 2), "first": (t, 0.0), "second": (0.0, t)}[side]
+        outline = _offset_polyline(uv, lo, hi)
+        strip = cq.Face.makeFromWires(cq.Wire.makePolygon([pl.point(*q) for q in outline], close=True))
+        mid = pl.point(*((uv[0][0] + uv[1][0]) / 2, (uv[0][1] + uv[1][1]) / 2))
+        x0, y0 = uv[0]
+        x1, y1 = uv[1]
+        ln = math.hypot(x1 - x0, y1 - y0)
+        mid = mid + (pl.xdir * (-(y1 - y0) / ln) + pl.ydir * ((x1 - x0) / ln)) * ((lo - hi) / 2)
+        candidates = []
+        for s in (1, -1):
+            prism = cq.Solid.extrudeLinear(strip, n * (s * reach))
+            piece = _rib_piece(ctx, prism, mid + n * (s * min(0.05, t / 4)), n * s, mid, reach)
+            if piece is not None:
+                candidates.append(piece)
+    if not candidates:
+        raise BuildError(f"{ctx.fid}: the rib does not reach material on either side of the sketch line "
+                         f"({'in the sketch plane' if mode == 'parallel' else 'along the sketch normal'}); "
+                         "move the line so the region between it and the part is closed off by the part")
+    candidates.sort(key=lambda s_: s_.Volume())
+    return "add", candidates[1 if p.get("flip") and len(candidates) > 1 else 0]
+
+
+def _f_sheet_hem(ctx: _Ctx, p: dict) -> tuple[str, cq.Shape]:
+    """180° fold on a base edge: open hem (inside gap) or closed hem (folded flat)."""
+    st = _need_sheet(ctx)
+    if not st.base_faces_uv:
+        raise BuildError(f"{ctx.fid}: add a base flange first")
+    kind = p.get("type", "closed")
+    if kind not in ("closed", "open"):
+        raise BuildError(f"{ctx.fid}.type must be closed or open")
+    if kind == "open":
+        gap = ctx.pos(p.get("gap"), "gap")
+    else:
+        if p.get("gap") not in (None, 0):
+            raise BuildError(f"{ctx.fid}: a closed hem has no gap; use type open")
+        gap = _sm.CLOSED_HEM_GAP
+    edge = p.get("edge") or {}
+    if "near" not in edge:
+        raise BuildError(f"{ctx.fid}.edge must be {{\"near\": [x, y, z]}} on a straight base edge")
+    near = ctx.vec(edge["near"][0] if edge["near"] and isinstance(edge["near"][0], list) else edge["near"], "edge.near")
+    try:
+        fl = _sm.make_flange(st, ctx.shape, near, ctx.pos(p.get("length"), "length"), 180.0,
+                             p.get("direction", "up") != "down", gap / 2, ctx.num(p.get("trim_start", 0), "trim_start"),
+                             ctx.num(p.get("trim_end", 0), "trim_end"), ctx.fid)
+        fl.kind = "hem"
+        _sm.check_collisions(st, fl)
+    except ValueError as e:
+        raise BuildError(f"{ctx.fid}: {e}")
+    common = fl.body.intersect(ctx.shape)
+    if common.Solids() and common.Volume() > 1e-6:
+        raise BuildError(f"{ctx.fid}: the hem runs into other material of the part; shorten it or trim its ends")
+    st.flanges.append(fl)
+    return "add", fl.body
+
+
 _TOOL_FEATURES = {
     "extrude": _f_extrude, "revolve": _f_revolve, "hole": _f_hole, "sweep": _f_sweep, "loft": _f_loft,
-    "sheet_base": _f_sheet_base, "sheet_flange": _f_sheet_flange,
+    "sheet_base": _f_sheet_base, "sheet_flange": _f_sheet_flange, "sheet_hem": _f_sheet_hem, "rib": _f_rib,
     "pattern_linear": _f_pattern_linear, "pattern_circular": _f_pattern_circular, "mirror": _f_mirror,
 }
-_MODIFIERS = {"fillet": _f_fillet, "chamfer": _f_chamfer, "shell": _f_shell, "thread": _f_thread}
+_MODIFIERS = {"fillet": _f_fillet, "chamfer": _f_chamfer, "shell": _f_shell, "thread": _f_thread,
+              "draft": _f_draft, "variable_fillet": _f_variable_fillet}
 FEATURE_TYPES = sorted([*_TOOL_FEATURES, *_MODIFIERS, "sketch"])
 
 

@@ -530,7 +530,7 @@ export default function SketchEditor({ model, selection, editing, run, apply, on
                     <button className="primary" disabled={!solveOut?.converged || !!solveOut?.profile?.error} onClick={() => { setFinish({ ...finish, op: 'revolve' }); submit('revolve') }}>Revolve (about {V})</button>
                     <button disabled={!solveOut?.converged} onClick={() => submit('sketch')}>Sketch only</button>
                   </div>
-                  <label className="row small"><input type="checkbox" checked={pathOnly} onChange={(e) => setPathOnly(e.target.checked)} /> use as a sweep path (open curves allowed)</label>
+                  <label className="row small"><input type="checkbox" checked={pathOnly} onChange={(e) => setPathOnly(e.target.checked)} /> use as a sweep path or rib (open curves allowed)</label>
                   <div className="sk-buttons">
                   </div>
                 </>

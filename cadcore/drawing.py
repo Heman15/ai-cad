@@ -69,8 +69,8 @@ def _polylines(compound) -> list[list[tuple[float, float]]]:
     return out
 
 
-def project_view(shape: cq.Shape, name: str) -> View2D:
-    n, x = VIEWS[name]
+def project_view(shape: cq.Shape, name: str, direction: tuple | None = None) -> View2D:
+    n, x = direction or VIEWS[name]
     nv, xv = cq.Vector(*n).normalized(), cq.Vector(*x).normalized()
     algo = HLRBRep_Algo()
     algo.Add(shape.wrapped)
@@ -79,10 +79,92 @@ def project_view(shape: cq.Shape, name: str) -> View2D:
     algo.Hide()
     h = HLRBRep_HLRToShape(algo)
     visible = _polylines(h.VCompound()) + _polylines(h.OutLineVCompound())
-    hidden = [] if name == "iso" else _polylines(h.HCompound()) + _polylines(h.OutLineHCompound())
+    hidden = [] if name == "iso" or name.startswith("section") else _polylines(h.HCompound()) + _polylines(h.OutLineHCompound())
     pts = [p for pl in visible for p in pl] or [(0.0, 0.0)]
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]
     return View2D(name, visible, hidden, xv, nv.cross(xv), (min(xs), min(ys), max(xs), max(ys)))
+
+
+# ---------------- section views ----------------
+
+_SECTION_AXIS = {"YZ": 0, "XZ": 1, "XY": 2}
+# plane -> (direction toward the viewer, screen x), and the same looking from the other side (flip)
+_SECTION_DIRS = {
+    "XZ": (((0, -1, 0), (1, 0, 0)), ((0, 1, 0), (-1, 0, 0))),
+    "YZ": (((1, 0, 0), (0, 1, 0)), ((-1, 0, 0), (0, -1, 0))),
+    "XY": (((0, 0, 1), (1, 0, 0)), ((0, 0, -1), (1, 0, 0))),
+}
+_PARENT_PREF = {"XZ": ("top", "left", "right"), "YZ": ("front", "top"), "XY": ("front", "left", "right")}
+
+
+@dataclass
+class Section:
+    label: str
+    plane: str
+    offset: float
+    parent: str
+    view: View2D
+    hatch: list[list[list[tuple[float, float]]]]  # per cut face: closed loops in view coordinates
+    sight: cq.Vector  # direction of sight (toward the kept material)
+
+
+def _chain(edges: list[cq.Edge]) -> list[cq.Vector]:
+    """Points along a closed wire, edges joined end to end whatever their orientation."""
+    pieces = []
+    for e in edges:
+        if e.geomType() == "LINE":
+            pieces.append([e.startPoint(), e.endPoint()])
+        else:
+            n = max(8, min(96, int(e.Length() / 0.5)))
+            pieces.append([e.positionAt(i / n) for i in range(n + 1)])
+    pts = pieces.pop(0)
+    while pieces:
+        best = min(range(len(pieces)), key=lambda i: min((pieces[i][0] - pts[-1]).Length, (pieces[i][-1] - pts[-1]).Length))
+        seg = pieces.pop(best)
+        if (seg[-1] - pts[-1]).Length < (seg[0] - pts[-1]).Length:
+            seg = seg[::-1]
+        pts.extend(seg[1:])
+    return pts
+
+
+def make_section(solid: cq.Shape, spec: dict[str, Any], label: str, side: str) -> Section:
+    """Cut the solid by an axis plane, keep the far side and project it; raises ValueError (user-facing)."""
+    if not isinstance(spec, dict):
+        raise ValueError("each section must be an object like {\"plane\": \"XZ\", \"offset\": 10}")
+    plane = str(spec.get("plane", "XZ")).upper()
+    if plane not in _SECTION_AXIS:
+        raise ValueError(f"section plane must be XY, YZ or XZ, got {spec.get('plane')!r}")
+    ax = _SECTION_AXIS[plane]
+    bb = solid.BoundingBox()
+    lo, hi = [(bb.xmin, bb.xmax), (bb.ymin, bb.ymax), (bb.zmin, bb.zmax)][ax]
+    offset = (lo + hi) / 2 if spec.get("offset") is None else float(spec["offset"])
+    if not lo + 1e-6 < offset < hi - 1e-6:
+        raise ValueError(f"section {label}-{label}: {plane} plane at {'xyz'[ax]}={offset:g} misses the part "
+                         f"(it spans {lo:g} … {hi:g})")
+    (d, xd) = _SECTION_DIRS[plane][1 if spec.get("flip") else 0]
+    dv = cq.Vector(*d)
+    # remove the material between the cutting plane and the viewer
+    big = bb.DiagonalLength + 10
+    lo3 = [bb.xmin - 5, bb.ymin - 5, bb.zmin - 5]
+    size = [bb.xlen + 10, bb.ylen + 10, bb.zlen + 10]
+    if d[ax] > 0:
+        lo3[ax], size[ax] = offset, big
+    else:
+        lo3[ax], size[ax] = offset - big, big
+    kept = solid.cut(cq.Solid.makeBox(*size, cq.Vector(*lo3)))
+    cut_faces = [f for f in kept.Faces() if f.geomType() == "PLANE" and f.normalAt().dot(dv) > 0.999
+                 and abs(f.Center().toTuple()[ax] - offset) < 1e-6]
+    if not cut_faces:
+        raise ValueError(f"section {label}-{label} does not cut any material")
+    parent = spec.get("view") or next((v for v in _PARENT_PREF[plane] if v in ("front", "top", side)), None)
+    if parent not in ("front", "top", side) or abs(cq.Vector(*VIEWS[parent][0]).dot(cq.Vector(*_UNIT[ax]))) > 1e-9:
+        raise ValueError(f"section {label}-{label}: the {plane} plane is not seen edge-on in the {parent} view")
+    view = project_view(kept, f"section {label}", (d, xd))
+    hatch = [[[view.project(q) for q in _chain(w.Edges())] for w in [f.outerWire(), *f.innerWires()]] for f in cut_faces]
+    return Section(label, plane, offset, parent, view, hatch, -dv)
+
+
+_UNIT = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
 
 
 # ---------------- SVG helpers ----------------
@@ -124,10 +206,16 @@ class _Svg:
   .sym { stroke: #000; stroke-width: 0.3; fill: none; }
   .symfill { fill: #000; stroke: none; }
   .box { stroke: #000; stroke-width: 0.3; fill: #fff; }
+  .cutplane { stroke: #000; stroke-width: 0.25; fill: none; stroke-dasharray: 8 1.5 1.5 1.5; }
+  .cutend { stroke: #000; stroke-width: 0.7; fill: none; }
+  .hatchline { stroke: #000; stroke-width: 0.13; }
+  .cut { stroke: #000; stroke-width: 0.5; stroke-linejoin: round; }
   text { font-family: 'DejaVu Sans', Arial, sans-serif; fill: #000; }
 """
         return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{self.w}mm" height="{self.h}mm" viewBox="0 0 {self.w} {self.h}">'
-                f'<style>{style}</style><rect width="{self.w}" height="{self.h}" fill="#fff"/>' + "".join(self.parts) + "</svg>")
+                f'<style>{style}</style>'
+                '<defs><pattern id="hatch" patternUnits="userSpaceOnUse" width="2" height="2" patternTransform="rotate(45)">'
+                f'<line x1="0" y1="0" x2="0" y2="2" class="hatchline"/></pattern></defs><rect width="{self.w}" height="{self.h}" fill="#fff"/>' + "".join(self.parts) + "</svg>")
 
 
 def _fmt(v: float) -> str:
@@ -143,10 +231,10 @@ def _scale_label(s: tuple[int, int]) -> str:
 def _hole_groups(result: BuildResult) -> list[dict[str, Any]]:
     groups: dict[tuple, dict[str, Any]] = {}
     for h in result.holes:
-        key = (round(h.diameter, 4), h.depth, h.cbore, h.csk, h.thread, h.thread_depth,
+        key = (round(h.diameter, 4), h.depth, h.cbore, h.csk, h.thread, h.thread_depth, h.standard,
                tuple(round(c, 6) for c in h.direction.normalized().toTuple()))
         g = groups.setdefault(key, {"diameter": h.diameter, "depth": h.depth, "cbore": h.cbore, "csk": h.csk,
-                                    "thread": h.thread, "thread_depth": h.thread_depth,
+                                    "thread": h.thread, "thread_depth": h.thread_depth, "standard": h.standard,
                                     "direction": h.direction.normalized(), "points": [], "features": set()})
         g["points"].extend(h.points)
         g["features"].add(h.feature)
@@ -175,11 +263,25 @@ def _callout(g: dict[str, Any], tol: str = "") -> str:
         s += f"  C'BORE Ø{_fmt(g['cbore'][0])} ↧{_fmt(g['cbore'][1])}"
     if g["csk"]:
         s += f"  CSK Ø{_fmt(g['csk'][0])} × {_fmt(g['csk'][1])}°"
+    if g.get("standard") and not g.get("thread"):
+        s += f"  ({g['standard']})"
     return s
 
 
-def make_drawing(result: BuildResult, spec: PartSpec, sheet: str = "A3", projection: str = "first") -> dict[str, Any]:
-    """Return {"svg": str, "scale": "1:2", "sheet": "A3", "views": [...], "warnings": [...]}"""
+def _frange(a: float, b: float, step: float):
+    x = a
+    while x <= b:
+        yield x
+        x += step
+
+
+def make_drawing(result: BuildResult, spec: PartSpec, sheet: str = "A3", projection: str = "first",
+                 sections: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Return {"svg": str, "scale": "1:2", "sheet": "A3", "views": [...], "warnings": [...]}.
+
+    sections: [{"plane": "XY"|"YZ"|"XZ", "offset": mm (default: through the middle), "flip": bool,
+    "label": "A", "view": parent view for the cutting line}] -> hatched section views A-A, B-B, ...
+    Raises ValueError for a section that misses the part or cannot be placed."""
     solid = result.shape.val()
     W, H = SHEETS[sheet]
     ann = {a["id"]: a for a in spec.annotations}
@@ -210,25 +312,93 @@ def make_drawing(result: BuildResult, spec: PartSpec, sheet: str = "A3", project
     # the three orthographic views form an L (front + side in a row, top in the column) and the iso goes top-right
     need_w, need_h = fw + sw + iw * 0.6, fh + th
     scale = next((s for s in SCALES if (need_w * s[0] / s[1] + 4 * gap) <= area_w and (need_h * s[0] / s[1] + 3 * gap) <= area_h), SCALES[-1])
-    k = scale[0] / scale[1]
     warnings = []
+    k = scale[0] / scale[1]
     if (need_w * k + 4 * gap) > area_w or (need_h * k + 3 * gap) > area_h:
         warnings.append(f"the part does not fit sheet {sheet} even at {_scale_label(scale)}; use a larger sheet")
 
+    # holes seen as circles in the top / front / side view (grouped before layout: their dimensions take room)
+    notes = []
+    per_view: dict[str, list[tuple[dict[str, Any], list[tuple[float, float]]]]] = defaultdict(list)
+    for g in _hole_groups(result):
+        d = g["direction"]
+        view = next((name for name in ("top", "front", side) if abs(abs(d.dot(cq.Vector(*VIEWS[name][0]).normalized())) - 1) < 1e-6), None)
+        if view is None:
+            notes.append(_callout(g) + " (inclined; not dimensioned)")
+            continue
+        per_view[view].append((g, [views[view].project(p) for p in g["points"]]))
+
+    secs = [make_section(solid, sp, (sp.get("label") if isinstance(sp, dict) and sp.get("label") else "ABCDEFGH"[i]), side)
+            for i, sp in enumerate(sections or [])]
+    if len({sc.label for sc in secs}) != len(secs):
+        raise ValueError("section labels must be unique")
+
+    def layout(k: float):
+        """View origins (bottom-left, sheet mm, y down) for scale k; first angle: top BELOW front, left RIGHT of front."""
+        x0 = margin + gap
+        if projection == "first":
+            fo = (x0, margin + gap + fh * k)
+            to = (x0, fo[1] + gap + th * k)
+        else:
+            to = (x0, margin + gap + th * k)
+            fo = (x0, to[1] + gap + fh * k)
+        return {"front": fo, "top": to, side: (fo[0] + fw * k + gap, fo[1]),
+                "iso": (W - margin - gap - iw * k * 0.6, margin + gap + ih * k * 0.6)}
+
+    def occupied(k: float, org) -> list[tuple[float, float, float, float]]:
+        """Rectangles (x0, y0, x1, y1) taken by views with their dimensions and callouts, notes and title block."""
+        rects = []
+        for name, v in views.items():
+            kk = k * 0.6 if name == "iso" else k
+            (ox, oy), (vw, vh) = org[name], size(v)
+            x0_, y0_, x1_, y1_ = ox - 16, oy - vh * kk - 9, ox + vw * kk + 6, oy + 16
+            items = per_view.get(name, [])
+            if items:
+                ys = {round(c[1], 4) for _, cs in items for c in cs}
+                xs = {round(c[0], 4) for _, cs in items for c in cs}
+                text_w = max(len(_callout(g)) for g, _ in items) * 3.2 * 0.6
+                x1_ = ox + vw * kk + 10 + 7 * (min(len(ys), 8) + 1) + 6 + text_w
+                y1_ = max(oy + 19 + 7 * min(len(xs), 8), oy - vh * kk + 4 + 12 * len(items) + 8)
+            rects.append((x0_, y0_, x1_, y1_))
+        n_notes = 3 + len(notes) + sum(1 for st in status.values() if not st["ok"])
+        n_tol = sum(1 for a in spec.annotations if a.get("type") == "tolerance")
+        rects.append((margin, H - margin / 2 - title_h - 10 - 5 * n_notes - (6 * n_tol + 10 if n_tol else 0), margin + 150, H))
+        rects.append((W - margin / 2 - 180, H - margin / 2 - title_h - 4, W, H))
+        return rects
+
+    def free(r, rects) -> bool:
+        return all(r[2] <= q[0] or r[0] >= q[2] or r[3] <= q[1] or r[1] >= q[3] for q in rects)
+
+    def place_sections(k: float, org):
+        rects, out = occupied(k, org), {}
+        for sc in secs:
+            vw, vh = size(sc.view)
+            w_, h_ = vw * k + 8, vh * k + 14  # label above, breathing room around
+            spot = next(((x, y) for y in _frange(margin, H - margin - h_, 4) for x in _frange(margin, W - margin - w_, 4)
+                         if free((x, y, x + w_, y + h_), rects)), None)
+            if spot is None:
+                return None
+            rects.append((spot[0], spot[1], spot[0] + w_, spot[1] + h_))
+            out[sc.label] = (spot[0] + 4, spot[1] + 10 + vh * k)  # bottom-left of the section view
+        return out
+
+    sec_org: dict[str, tuple[float, float]] = {}
+    if secs:
+        for cand in SCALES[SCALES.index(scale):]:
+            kk = cand[0] / cand[1]
+            got = place_sections(kk, layout(kk))
+            if got is not None:
+                scale, k, sec_org = cand, kk, got
+                break
+        else:
+            raise ValueError(f"the section views do not fit on sheet {sheet}; use a larger sheet or fewer sections")
+    k = scale[0] / scale[1]
+    org = layout(k)
+    front_origin, top_origin, side_origin, iso_origin = org["front"], org["top"], org[side], org["iso"]
+    iso_k = k * 0.6
+
     svg = _Svg(W, H)
     svg.add(f'<rect x="{margin / 2}" y="{margin / 2}" width="{W - margin}" height="{H - margin}" class="frame"/>')
-
-    # placement (sheet coordinates, y down). first angle: top view BELOW front, left view RIGHT of front.
-    x0 = margin + gap
-    if projection == "first":
-        front_origin = (x0, margin + gap + fh * k)           # bottom-left corner of the front view
-        top_origin = (x0, front_origin[1] + gap + th * k)
-    else:
-        top_origin = (x0, margin + gap + th * k)
-        front_origin = (x0, top_origin[1] + gap + fh * k)
-    side_origin = (front_origin[0] + fw * k + gap, front_origin[1])
-    iso_k = k * 0.6
-    iso_origin = (W - margin - gap - iw * iso_k, margin + gap + ih * iso_k)
 
     def place(v: View2D, origin, kk):
         ox, oy = origin
@@ -275,18 +445,8 @@ def make_drawing(result: BuildResult, spec: PartSpec, sheet: str = "A3", project
     dim_v("front", fv.bbox[1], fv.bbox[3], fv.bbox[0], -10, _fmt(fh) + dim_tol(fh))
     dim_v("top", tv.bbox[1], tv.bbox[3], tv.bbox[0], -10, _fmt(th) + dim_tol(th))
 
-    # holes seen as circles in the top / front / side view: centre marks, one set of position
-    # dimensions per view (from the view's datum edges), callouts stacked beside the view
-    notes = []
-    per_view: dict[str, list[tuple[dict[str, Any], list[tuple[float, float]]]]] = defaultdict(list)
-    for g in _hole_groups(result):
-        d = g["direction"]
-        view = next((name for name in ("top", "front", side) if abs(abs(d.dot(cq.Vector(*VIEWS[name][0]).normalized())) - 1) < 1e-6), None)
-        if view is None:
-            notes.append(_callout(g) + " (inclined; not dimensioned)")
-            continue
-        per_view[view].append((g, [views[view].project(p) for p in g["points"]]))
-
+    # holes: centre marks, one set of position dimensions per view (from the view's datum edges),
+    # callouts stacked beside the view
     for view, items in per_view.items():
         v, T = views[view], tf[view]
         xs = sorted({round(c[0], 4) for _, cs in items for c in cs})[:8]
@@ -317,6 +477,42 @@ def make_drawing(result: BuildResult, spec: PartSpec, sheet: str = "A3", project
             frames = [a for a in spec.annotations if a.get("type") == "gdt" and (a.get("target") or {}).get("feature") in g["features"]]
             for fi, a in enumerate(frames):
                 _frame(svg, tx, ty + 1.5 + fi * 6.5, a)
+
+    # section views: cutting-plane line with arrows and letters on the parent view, hatched cut faces
+    for sc in secs:
+        pv, T = views[sc.parent], tf[sc.parent]
+        axis = cq.Vector(*_UNIT[_SECTION_AXIS[sc.plane]])
+        ex, ey = axis.dot(pv.xdir), axis.dot(pv.ydir)
+        if abs(ex) > 0.5:  # plane seen as a vertical line in the parent view
+            u = sc.offset * ex
+            a, b = T(u, pv.bbox[3]), T(u, pv.bbox[1])
+            a, b = (a[0], a[1] - 6), (b[0], b[1] + 6)
+        else:
+            w_ = sc.offset * ey
+            a, b = T(pv.bbox[0], w_), T(pv.bbox[2], w_)
+            a, b = (a[0] - 6, a[1]), (b[0] + 6, b[1])
+        svg.line(*a, *b, "cutplane")
+        sx_, sy_ = sc.sight.dot(pv.xdir), -sc.sight.dot(pv.ydir)  # sheet y points down
+        ln = math.hypot(sx_, sy_) or 1
+        sx_, sy_ = sx_ / ln, sy_ / ln
+        tx_, ty_ = (b[0] - a[0]), (b[1] - a[1])
+        tl = math.hypot(tx_, ty_) or 1
+        tx_, ty_ = tx_ / tl, ty_ / tl
+        for (px, py), sgn in ((a, -1), (b, 1)):
+            svg.line(px, py, px - tx_ * sgn * 5, py - ty_ * sgn * 5, "cutend")  # thick ends of the chain line
+            svg.line(px, py, px + sx_ * 6, py + sy_ * 6, "cutend")
+            svg.arrow(px + sx_ * 6, py + sy_ * 6, sx_, sy_, 2.8)
+            svg.text(px + sx_ * 6 + tx_ * sgn * 3.5, py + sy_ * 6 + ty_ * sgn * 3.5 + 1.5, sc.label, 4.5, weight="bold")
+        v = sc.view
+        T = place(v, sec_org[sc.label], k)
+        for face_loops in sc.hatch:
+            d = " ".join("M " + " L ".join(f"{T(*q)[0]:.3f},{T(*q)[1]:.3f}" for q in loop) + " Z" for loop in face_loops)
+            svg.add(f'<path d="{d}" fill="url(#hatch)" fill-rule="evenodd" class="cut" data-section="{sc.label}"/>')
+        for pl in v.visible:
+            svg.poly([T(*p) for p in pl], "thick")
+        bx0, _ = T(v.bbox[0], v.bbox[1])
+        bx1, top_y = T(v.bbox[2], v.bbox[3])
+        svg.text((bx0 + bx1) / 2, top_y - 4, f"SECTION {sc.label}-{sc.label}", 3.5, weight="bold")
 
     # title block
     tb_w, tb_h = 180.0, title_h
@@ -401,7 +597,8 @@ def make_drawing(result: BuildResult, spec: PartSpec, sheet: str = "A3", project
         svg.text(margin + 2, ty0 - 4 - (len(notes) - 1 - i) * 5, n, 3, anchor="start")
     notes = []
     return {"svg": svg.render(), "scale": _scale_label(scale), "sheet": sheet, "projection": projection,
-            "views": list(views), "warnings": warnings}
+            "views": list(views) + [f"section {sc.label}" for sc in secs], "warnings": warnings,
+            "sections": [{"label": sc.label, "plane": sc.plane, "offset": sc.offset, "view": sc.parent} for sc in secs]}
 
 
 def _frame(svg: _Svg, x: float, y: float, a: dict[str, Any]) -> float:

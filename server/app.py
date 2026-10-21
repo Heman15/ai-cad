@@ -460,29 +460,39 @@ def export_to(fmt: str, body: PathIn):
 
 # ---------------- 2D drawings ----------------
 
-def _drawing(sheet: str, projection: str) -> dict[str, Any]:
+def _drawing(sheet: str, projection: str, sections: Any = None) -> dict[str, Any]:
     from cadcore.drawing import SHEETS, make_drawing
 
     if sheet not in SHEETS or projection not in ("first", "third"):
         raise HTTPException(400, "sheet must be A4/A3/A2 and projection first/third")
+    if isinstance(sections, str):  # query parameter: JSON list, e.g. [{"plane":"XZ"}]
+        try:
+            sections = json.loads(sections) if sections.strip() else None
+        except ValueError:
+            raise HTTPException(400, "sections must be a JSON list like [{\"plane\": \"XZ\", \"offset\": 10}]")
+    if sections is not None and not isinstance(sections, list):
+        raise HTTPException(400, "sections must be a list")
     with LOCK:
         if not S.project.result:
             raise HTTPException(400, "the model is empty")
-        return make_drawing(S.project.result, S.project.spec, sheet, projection)
+        try:
+            return make_drawing(S.project.result, S.project.spec, sheet, projection, sections)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
 
 @app.get("/api/drawing.svg")
-def drawing_svg(sheet: str = "A3", projection: str = "first"):
-    d = _drawing(sheet, projection)
+def drawing_svg(sheet: str = "A3", projection: str = "first", sections: str = ""):
+    d = _drawing(sheet, projection, sections)
     return Response(d["svg"], media_type="image/svg+xml", headers={"X-Drawing-Scale": d["scale"], "X-Drawing-Warnings": "; ".join(d["warnings"])})
 
 
 @app.get("/api/drawing.pdf")
-def drawing_pdf(sheet: str = "A3", projection: str = "first"):
+def drawing_pdf(sheet: str = "A3", projection: str = "first", sections: str = ""):
     from cadcore.drawing import to_pdf
 
     name = (S.project.spec.name or "part").replace(" ", "_")
-    return Response(to_pdf(_drawing(sheet, projection)["svg"]), media_type="application/pdf",
+    return Response(to_pdf(_drawing(sheet, projection, sections)["svg"]), media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{name}_drawing.pdf"'})
 
 
@@ -490,13 +500,14 @@ class DrawingExportIn(BaseModel):
     path: str
     sheet: str = "A3"
     projection: str = "first"
+    sections: list[dict[str, Any]] | None = None
 
 
 @app.post("/api/drawing/export")
 def drawing_export(body: DrawingExportIn):
     from cadcore.drawing import to_pdf
 
-    d = _drawing(body.sheet, body.projection)
+    d = _drawing(body.sheet, body.projection, body.sections)
     path = Path(body.path).expanduser()
     path.write_bytes(to_pdf(d["svg"]) if path.suffix.lower() == ".pdf" else d["svg"].encode())
     return {"ok": True, "message": f"drawing saved to {path}", "scale": d["scale"]}

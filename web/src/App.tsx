@@ -15,7 +15,7 @@ import Viewport, { type DisplayStyle, type MeasureGraphic, type PickMode, type S
 import MeasurePanel from './Measure'
 import { RibbonButton, RibbonGroup, ThemeButton, ViewIcon } from './ui'
 import {
-  Box, ChevronDown, CircleDot, CornerDownRight, Cuboid, Download, Factory, FileImage, FilePlus, FileText, FlipHorizontal2, FolderOpen, Gauge,
+  Box, ChartSpline, ChevronDown, CircleDot, Cone, CornerDownRight, Cuboid, Download, Drill, FoldVertical, TriangleRight, Factory, FileImage, FilePlus, FileText, FlipHorizontal2, FolderOpen, Gauge,
   Grid3x3, Layers, LayoutTemplate, Maximize, Minus, MousePointer2, Orbit, Package, PanelTop, PenLine, PenTool, Radius, Redo2, RotateCw, Ruler,
   Save, SaveAll, Scale3d, Scan, Settings2, SlidersHorizontal, Sparkles, Spline, Square, SquareDashed, SquareMinus, Triangle, Undo2, Waves, Weight,
   type LucideIcon,
@@ -276,10 +276,11 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
               {cmd('extrude', 'Extrude', Box)}{cmd('revolve', 'Revolve', RotateCw)}{cmd('sweep', 'Sweep', Spline)}{cmd('loft', 'Loft', Layers)}
             </RibbonGroup>
             <RibbonGroup label="Cut">
-              {cmd('cut', 'Extruded Cut', SquareMinus)}{cmd('hole', 'Hole', CircleDot)}
+              {cmd('cut', 'Extruded Cut', SquareMinus)}{cmd('hole', 'Hole', CircleDot)}{cmd('hole_wizard', 'Hole Wizard', Drill)}
             </RibbonGroup>
             <RibbonGroup label="Modify">
-              {cmd('fillet', 'Fillet', Radius)}{cmd('chamfer', 'Chamfer', Triangle)}{cmd('shell', 'Shell', Package)}{cmd('thread', 'Thread', Waves)}
+              {cmd('fillet', 'Fillet', Radius)}{cmd('variable_fillet', 'Variable Fillet', ChartSpline)}{cmd('chamfer', 'Chamfer', Triangle)}
+              {cmd('shell', 'Shell', Package)}{cmd('draft', 'Draft', Cone)}{cmd('rib', 'Rib', TriangleRight)}{cmd('thread', 'Thread', Waves)}
             </RibbonGroup>
             <RibbonGroup label="Pattern">
               {cmd('pattern_linear', 'Linear Pattern', Grid3x3)}{cmd('pattern_circular', 'Circular Pattern', Orbit)}{cmd('mirror', 'Mirror', FlipHorizontal2)}
@@ -308,7 +309,7 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
           </>}
           {rtab === 'sheet' && <>
             <RibbonGroup label="Sheet Metal">
-              {cmd('sheet_setup', 'Parameters', SlidersHorizontal)}{cmd('sheet_base', 'Base Flange', PanelTop)}{cmd('sheet_flange', 'Edge Flange', CornerDownRight)}
+              {cmd('sheet_setup', 'Parameters', SlidersHorizontal)}{cmd('sheet_base', 'Base Flange', PanelTop)}{cmd('sheet_flange', 'Edge Flange', CornerDownRight)}{cmd('sheet_hem', 'Hem', FoldVertical)}
               <RibbonButton icon={Scan} label="Flat Pattern" disabled={!model?.sheet} title={model?.sheet ? 'Unfolded blank with bend lines' : 'Add a base flange first'} onClick={() => setShowFlat(true)} />
             </RibbonGroup>
           </>}
