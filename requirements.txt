@@ -2,6 +2,7 @@ anthropic==1.15.0
 cadquery==2.8.0
 CairoSVG==2.9.1
 ezdxf==1.4.5
+fast-simplification==0.2.0
 fastapi==0.146.0
 gmsh==4.15.2
 httpx==0.28.1
@@ -9,7 +10,10 @@ mcp==2.3.0
 numpy==2.5.4
 openai==3.35.1
 pillow==13.0.0
+pycollada==0.9.3
 pydantic==2.14.1
 pypdfium2==5.14.0
 scipy==1.18.1
+trimesh==5.1.1
 uvicorn==0.54.0
+xacro==2.1.1

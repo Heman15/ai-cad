@@ -34,6 +34,8 @@ interface Props {
   display?: DisplayStyle
   showDims?: boolean
   measure?: MeasureGraphic | null
+  /** Assembly: extra motion per component (column-major 4x4), e.g. while dragging a robot joint. */
+  poses?: Record<string, number[]>
 }
 
 const COLORS = {
@@ -51,6 +53,7 @@ interface Ctx {
   faces: THREE.Mesh[]
   edges: THREE.Line[]
   vertices: THREE.Points | null
+  groups: Map<string, THREE.Group>
   fitted: boolean
   hover: { kind: 'face' | 'edge' | 'vertex'; index: number } | null
   paint: () => void
@@ -61,7 +64,7 @@ const VIEW_DIRS: Record<StdView, [number, number, number]> = {
 }
 
 const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
-  { model, mode, selection, selectedFeature, onPick, overlay, markers, display = 'shaded-edges', showDims = false, measure }, ref) {
+  { model, mode, selection, selectedFeature, onPick, overlay, markers, display = 'shaded-edges', showDims = false, measure, poses }, ref) {
   const hostRef = useRef<HTMLDivElement>(null)
   const ctxRef = useRef<Ctx | null>(null)
   const [glError, setGlError] = useState<string | null>(null)
@@ -135,7 +138,7 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
     }
 
     const ctx: Ctx = {
-      renderer, labels, scene, camera, controls, part, faces: [], edges: [], vertices: null, fitted: false, hover: null,
+      renderer, labels, scene, camera, controls, part, faces: [], edges: [], vertices: null, groups: new Map(), fitted: false, hover: null,
       paint: () => paint(ctx, paintRef.current),
     }
     ctxRef.current = ctx
@@ -255,9 +258,22 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
   useEffect(() => {
     const ctx = ctxRef.current
     if (!ctx) return
-    for (const child of [...ctx.part.children]) {
-      ctx.part.remove(child)
+    ctx.part.traverse((child) => {
       if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points) child.geometry.dispose()
+    })
+    ctx.part.clear()
+    ctx.groups = new Map()
+    // Assembly components get their own group, so they can move (joints) without rebuilding.
+    const holder = (component?: string) => {
+      if (!component) return ctx.part
+      let g = ctx.groups.get(component)
+      if (!g) {
+        g = new THREE.Group()
+        g.matrixAutoUpdate = false
+        ctx.groups.set(component, g)
+        ctx.part.add(g)
+      }
+      return g
     }
     ctx.faces = []
     ctx.edges = []
@@ -273,12 +289,13 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
       g.setAttribute('position', new THREE.Float32BufferAttribute(f.vertices, 3))
       g.setIndex(f.triangles)
       g.computeVertexNormals()
+      const base = f.color ? new THREE.Color(f.color).getHex() : COLORS.base
       const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
-        color: COLORS.base, metalness: 0.2, roughness: 0.5, side: THREE.DoubleSide,
+        color: base, metalness: 0.2, roughness: 0.5, side: THREE.DoubleSide,
         polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
       }))
-      m.userData = { index: f.index, feature: f.feature }
-      ctx.part.add(m)
+      m.userData = { index: f.index, feature: f.feature, base }
+      holder(f.component).add(m)
       ctx.faces.push(m)
     }
     for (const e of ents.edges) {
@@ -286,7 +303,7 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
       g.setAttribute('position', new THREE.Float32BufferAttribute(e.polyline, 3))
       const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color: COLORS.edge }))
       l.userData = { index: e.index, feature: e.feature }
-      ctx.part.add(l)
+      holder(e.component).add(l)
       ctx.edges.push(l)
     }
     if (ents.vertices?.length) {
@@ -301,6 +318,18 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
       ctx.fitted = true
     }
   }, [model])
+
+  // Component motion (assembly joints).
+  useEffect(() => {
+    const ctx = ctxRef.current
+    if (!ctx) return
+    for (const [id, g] of ctx.groups) {
+      const p = poses?.[id]
+      if (p) g.matrix.fromArray(p)
+      else g.matrix.identity()
+      g.matrixWorldNeedsUpdate = true
+    }
+  }, [poses, model])
 
   // Display style.
   useEffect(() => {
@@ -418,7 +447,7 @@ function paint(ctx: Ctx, { selection, selectedFeature, mode }: { selection: SelR
     const hoveredFace = hv?.kind === 'face' ? ctx.faces.find((f) => f.userData.index === hv.index) : undefined
     const hovered = hoveredFace && (hoveredFace === m || (mode === 'feature' && m.userData.feature && hoveredFace.userData.feature === m.userData.feature))
     ;(m.material as THREE.MeshStandardMaterial).color.setHex(
-      selFaces.has(i) ? COLORS.faceSel : inFeature ? COLORS.featureSel : hovered ? COLORS.hover : COLORS.base)
+      selFaces.has(i) ? COLORS.faceSel : inFeature ? COLORS.featureSel : hovered ? COLORS.hover : m.userData.base ?? COLORS.base)
   }
   for (const l of ctx.edges) {
     const i = l.userData.index

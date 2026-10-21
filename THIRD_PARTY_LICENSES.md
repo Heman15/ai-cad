@@ -14,6 +14,10 @@ AI CAD is distributed under the GNU AGPL v3 (see `LICENSE`). It uses the followi
 | CairoSVG | 2.9.1 | LGPL-3.0-or-later | SVG → PDF/PNG for drawings |
 | pypdfium2 (PDFium) | 5.14.0 | BSD-3-Clause / Apache-2.0 | rendering imported PDF drawings |
 | Pillow | 13.0.0 | MIT-CMU | image handling |
+| trimesh | 5.1.1 | MIT | reading robot meshes (STL, OBJ, PLY, DAE) |
+| pycollada | 0.9.3 | BSD-3-Clause | COLLADA (.dae) meshes |
+| xacro | 2.1.1 | BSD-3-Clause | expanding xacro robot descriptions |
+| fast-simplification | 0.2.0 | MIT | reducing very large meshes |
 | FastAPI | 0.146.0 | MIT | local HTTP API |
 | Uvicorn | 0.54.0 | BSD-3-Clause | HTTP server |
 | Pydantic | 2.14.1 | MIT | request validation |

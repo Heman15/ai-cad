@@ -46,6 +46,9 @@ class Component:
     rotation: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])  # rotation vector (axis * angle, degrees)
     fixed: bool = False
     name: str | None = None
+    link: str | None = None  # robot link this component belongs to (URDF import)
+    link_pose: list[float] | None = None  # [x, y, z, rx, ry, rz] of the component in its link frame
+    color: str | None = None
 
 
 @dataclass
@@ -53,6 +56,7 @@ class AssemblySpec:
     name: str = "Assembly"
     components: list[Component] = field(default_factory=list)
     mates: list[dict[str, Any]] = field(default_factory=list)
+    robot: dict[str, Any] | None = None  # links and joints (see urdf.py); joints drive the link components
 
     def clone(self) -> "AssemblySpec":
         return copy.deepcopy(self)
@@ -62,7 +66,7 @@ class AssemblySpec:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "AssemblySpec":
-        return cls(d.get("name", "Assembly"), [Component(**c) for c in d.get("components", [])], list(d.get("mates", [])))
+        return cls(d.get("name", "Assembly"), [Component(**c) for c in d.get("components", [])], list(d.get("mates", [])), d.get("robot"))
 
     def component(self, cid: str) -> Component | None:
         return next((c for c in self.components if c.id == cid), None)
@@ -134,8 +138,8 @@ class _Cache:
             raise AssemblyError(f"component file not found: {path}")
         if key in self.items and self.items[key][0] == mtime:
             return self.items[key][1]
-        if path.suffix.lower() in (".step", ".stp"):
-            shape = cq.importers.importStep(str(path)).val()
+        if path.suffix.lower() in (".step", ".stp", ".brep"):
+            shape = cq.Shape.importBrep(str(path)) if path.suffix.lower() == ".brep" else cq.importers.importStep(str(path)).val()
             info = {"shape": shape, "name": path.stem, "material": None, "mass_kg": None, "result": None}
         else:
             from .project import Project
@@ -145,7 +149,7 @@ class _Cache:
             m = p.spec.material
             info = {"shape": p.result.shape.val(), "name": p.spec.name, "material": m.name if m else None,
                     "mass_kg": p.result.volume_mm3 * 1e-9 * m.density if m else None, "result": p.result}
-        info["volume_mm3"] = info["shape"].Volume()
+        info["volume_mm3"] = abs(info["shape"].Volume()) if info["shape"].ShapeType() in ("Solid", "Compound") else 0.0
         self.items[key] = (mtime, info)
         return info
 
@@ -344,6 +348,9 @@ class AssemblyProject:
         return {c.id: CACHE.load(resolve_path(self.path, c.file))["shape"] for c in spec.components}
 
     def _solve(self, spec: AssemblySpec) -> dict[str, Any]:
+        from .urdf import apply_kinematics
+
+        apply_kinematics(spec)  # robot joints place their links first; mates then position other parts
         st = solve(spec, self.shapes(spec))
         if not st["converged"]:
             raise AssemblyError(f"mates conflict ({', '.join(map(str, st['conflicts']))}); remove or change one")
@@ -378,6 +385,21 @@ class AssemblyProject:
         self.spec = self._redo.pop()
         self.status = self._solve(self.spec)
         return {"ok": True, "message": "redone"}
+
+    def move_joints(self, values: dict[str, float]) -> dict[str, Any]:
+        """Set joint values (degrees / mm) without an undo step, like moving the view."""
+        from .urdf import set_joint
+
+        if not self.spec.robot:
+            return {"ok": False, "message": "this assembly has no joints (import a URDF first)"}
+        cand = self.spec.clone()
+        try:
+            msgs = [set_joint(cand.robot, k, v) for k, v in values.items()]
+            st = self._solve(cand)
+        except AssemblyError as e:
+            return {"ok": False, "message": str(e)}
+        self.spec, self.status = cand, st
+        return {"ok": True, "message": ", ".join(msgs)}
 
     def save(self, path: str) -> None:
         old = self.path
@@ -454,6 +476,13 @@ class AssemblyProject:
         if len(spec.mates) == before:
             raise AssemblyError(f"no mate {id!r}")
         return f"removed {id}"
+
+    def _cmd_set_joint(self, spec, name, value):
+        from .urdf import set_joint
+
+        if not spec.robot:
+            raise AssemblyError("this assembly has no joints (import a URDF first)")
+        return set_joint(spec.robot, name, value)
 
     def _cmd_set_name(self, spec, name):
         spec.name = str(name)

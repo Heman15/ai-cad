@@ -112,3 +112,8 @@ Windows and macOS installers are not built. The code is portable, but the script
   - **Interface:** command ribbon (Features, Sketch, Evaluate, Sheet Metal, Import / Export), FeatureManager tree with icons, heads-up view toolbar (standard views, display styles, selection filter), orientation triad, gradient viewport, hover pre-highlight, status bar, and a light/dark/system theme switch.
   - **Measure tool:** picks vertices, edges and faces (no Shift needed); shows distance, dX/dY/dZ, angle, centre distance, diameter, length, area or coordinates in a panel and as a dimension in the 3D view. "Dimensions" shows the overall part size in 3D. Backend: vertex references, closest-point pairs, and the angle between straight edges.
   - **Tests:** 65 unit/API tests and 5 UI suites pass (the smoke suite now covers the measure tool).
+- **2026-10-20:**
+  - **URDF import:** URDF and xacro files become an assembly. Box, cylinder and sphere links become parametric parts named by size, so the BOM counts shared parts. STL, OBJ, PLY and DAE meshes become solids: triangles are joined into a connected shell, coplanar faces are merged back into planar faces, COLLADA units are honoured, and meshes over 30k triangles are decimated. Joints (revolute, continuous, prismatic, fixed, mimic) are driven by forward kinematics with limits, from sliders, without undo steps. URDF masses are compared with the CAD volume. Missing meshes are reported, never guessed.
+  - **Example:** `examples/robot_arm` (xacro, package:// meshes, a DAE in centimetres).
+  - **Not supported:** floating and planar joints (imported as fixed), textures, dynamics.
+  - **Tests:** `test_urdf.py` (6) and the `ui_urdf` suite.

@@ -1,0 +1,109 @@
+<?xml version="1.0"?>
+<!-- AI CAD URDF import example: a 4-axis arm with a parallel gripper and a camera.
+     Covers box/cylinder/sphere primitives, an STL mesh via package://, a DAE mesh in centimetres,
+     revolute, continuous, prismatic, fixed and mimic joints, and a xacro macro. -->
+<robot name="demo_arm" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:property name="link_len" value="0.25"/>
+  <xacro:property name="r" value="0.03"/>
+
+  <material name="grey"><color rgba="0.55 0.58 0.62 1"/></material>
+  <material name="orange"><color rgba="0.95 0.45 0.1 1"/></material>
+  <material name="dark"><color rgba="0.15 0.16 0.18 1"/></material>
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.025"/>
+      <geometry><box size="0.2 0.2 0.05"/></geometry>
+      <material name="dark"/>
+    </visual>
+    <inertial><mass value="4.0"/><inertia ixx="0.01" iyy="0.01" izz="0.01" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+
+  <link name="turntable">
+    <visual>
+      <origin xyz="0 0 0.02"/>
+      <geometry><cylinder radius="0.07" length="0.04"/></geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+  <joint name="base_yaw" type="continuous">
+    <parent link="base_link"/><child link="turntable"/>
+    <origin xyz="0 0 0.05"/><axis xyz="0 0 1"/>
+  </joint>
+
+  <xacro:macro name="arm_link" params="name">
+    <link name="${name}">
+      <visual>
+        <origin xyz="0 0 ${link_len/2}"/>
+        <geometry><cylinder radius="${r}" length="${link_len}"/></geometry>
+        <material name="orange"/>
+      </visual>
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry><cylinder radius="${r*1.3}" length="${r*2.6}"/></geometry>
+        <material name="grey"/>
+      </visual>
+      <inertial><mass value="1.2"/><inertia ixx="0.005" iyy="0.005" izz="0.001" ixy="0" ixz="0" iyz="0"/></inertial>
+    </link>
+  </xacro:macro>
+
+  <xacro:arm_link name="upper_arm"/>
+  <joint name="shoulder" type="revolute">
+    <parent link="turntable"/><child link="upper_arm"/>
+    <origin xyz="0 0 0.08"/><axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="50" velocity="1"/>
+  </joint>
+
+  <xacro:arm_link name="forearm"/>
+  <joint name="elbow" type="revolute">
+    <parent link="upper_arm"/><child link="forearm"/>
+    <origin xyz="0 0 ${link_len}"/><axis xyz="0 1 0"/>
+    <limit lower="-2.5" upper="2.5" effort="30" velocity="1"/>
+  </joint>
+
+  <link name="wrist">
+    <visual><geometry><sphere radius="0.035"/></geometry><material name="grey"/></visual>
+  </link>
+  <joint name="wrist_roll" type="revolute">
+    <parent link="forearm"/><child link="wrist"/>
+    <origin xyz="0 0 ${link_len}"/><axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="3.14" effort="10" velocity="2"/>
+  </joint>
+
+  <link name="palm">
+    <visual>
+      <origin xyz="0 0 0.01"/>
+      <geometry><box size="0.09 0.04 0.02"/></geometry>
+      <material name="dark"/>
+    </visual>
+  </link>
+  <joint name="palm_mount" type="fixed">
+    <parent link="wrist"/><child link="palm"/><origin xyz="0 0 0.03"/>
+  </joint>
+
+  <link name="finger_left">
+    <visual><geometry><mesh filename="package://demo_arm/meshes/finger.stl"/></geometry><material name="grey"/></visual>
+  </link>
+  <joint name="finger_left_slide" type="prismatic">
+    <parent link="palm"/><child link="finger_left"/>
+    <origin xyz="-0.02 0 0.02"/><axis xyz="-1 0 0"/>
+    <limit lower="0" upper="0.02" effort="5" velocity="0.05"/>
+  </joint>
+
+  <link name="finger_right">
+    <visual><origin rpy="0 0 ${pi}"/><geometry><mesh filename="package://demo_arm/meshes/finger.stl"/></geometry><material name="grey"/></visual>
+  </link>
+  <joint name="finger_right_slide" type="prismatic">
+    <parent link="palm"/><child link="finger_right"/>
+    <origin xyz="0.02 0 0.02"/><axis xyz="1 0 0"/>
+    <limit lower="0" upper="0.02" effort="5" velocity="0.05"/>
+    <mimic joint="finger_left_slide" multiplier="1"/>
+  </joint>
+
+  <link name="camera">
+    <visual><origin rpy="0 ${pi/2} 0"/><geometry><mesh filename="package://demo_arm/meshes/camera.dae"/></geometry><material name="dark"/></visual>
+  </link>
+  <joint name="camera_mount" type="fixed">
+    <parent link="forearm"/><child link="camera"/><origin xyz="0.05 0 0.15"/>
+  </joint>
+</robot>

@@ -240,7 +240,9 @@ def assembly(command: str = "get", args: dict[str, Any] | None = None) -> dict[s
     """Assembly workspace. command 'get' returns components, mates, solver status and BOM. Others:
     add_component(file, position, rotation, fixed), remove_component(id), set_transform(id, position, rotation),
     set_fixed(id, fixed), add_mate(type coincident|distance|parallel|concentric, a {component, face {point, normal}},
-    b {...}, value, aligned), remove_mate(id), new, save(path), open(path), interference. Faces use component-local coordinates."""
+    b {...}, value, aligned), remove_mate(id), new, save(path), open(path), interference. Faces use component-local coordinates.
+    Robots: import_urdf(path, out_dir?, geometry visual|collision) converts a URDF or xacro into parts plus an
+    assembly and opens it; joints(values {joint: degrees or mm}) moves joints; set_joint(name, value) does it as an undo step."""
     if command == "get":
         m = _req("GET", "/api/asm")
     elif command in ("new", "undo", "redo", "interference"):
@@ -249,6 +251,11 @@ def assembly(command: str = "get", args: dict[str, Any] | None = None) -> dict[s
             return m
     elif command in ("save", "open"):
         m = _req("POST", f"/api/asm/{command}", {"path": (args or {}).get("path")})
+    elif command == "import_urdf":
+        r = _req("POST", "/api/asm/import_urdf", args or {})
+        m = {**r["model"], "report": r["report"], "path": r["path"]}
+    elif command == "joints":
+        return _req("POST", "/api/asm/joints", {"values": (args or {}).get("values", {})})
     else:
         r = _req("POST", "/api/asm/command", {"command": command, "args": args or {}})
         m = {**r["model"], "result": r["result"]}

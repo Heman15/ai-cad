@@ -3,13 +3,21 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { desktop, fmt, type Json, type Model, type SelRef } from './api'
 import ErrorBoundary from './ErrorBoundary'
 import Viewport, { type StdView, type ViewportHandle } from './Viewport'
+import * as THREE from 'three'
 
 /* Assembly workspace: components referencing part files, mates, interference, BOM, STEP export. */
 
-interface Comp { id: string; file: string; name?: string; fixed: boolean; position: number[]; rotation: number[]; material?: string | null; mass_kg?: number | null; error?: string }
+interface Comp { id: string; file: string; name?: string; fixed: boolean; position: number[]; rotation: number[]; material?: string | null; mass_kg?: number | null; error?: string; link?: string | null }
+interface Joint { name: string; type: string; parent: string; child: string; lower: number | null; upper: number | null; value: number; mimic: string | null }
+interface Robot { name: string; root: string; file: string; geometry: string; joints: Joint[]; links: Record<string, { name: string; mass_kg: number | null }> }
+interface UrdfReport {
+  robot: string; links: number; joints: number; parametric_parts: number; mesh_parts: number; skipped: string[]; warnings: string[]; folder: string
+  masses: { link: string; mass_kg: number; cad_volume_mm3: number | null; implied_density: number | null }[]
+  meshes: Record<string, { source: string; triangles_in: number; faces: number; closed: boolean; decimated_to?: number }>
+}
 interface Mate { id: string; type: string; a: { component: string }; b: { component: string }; value: number; aligned: boolean }
 interface AsmModel {
-  spec: { name: string; components: Comp[]; mates: Mate[] }
+  spec: { name: string; components: Comp[]; mates: Mate[]; robot: Robot | null }
   path: string | null
   status: { converged: boolean; dof: number; conflicts: string[] }
   can_undo: boolean; can_redo: boolean
@@ -27,7 +35,16 @@ async function call<T>(url: string, body?: unknown): Promise<T> {
 }
 
 const ASM = [{ name: 'AI CAD assembly', extensions: ['aicadasm'] }]
-const PARTS = [{ name: 'Parts', extensions: ['aicad', 'json', 'step', 'stp'] }]
+const PARTS = [{ name: 'Parts', extensions: ['aicad', 'json', 'step', 'stp', 'brep'] }]
+const URDF = [{ name: 'Robot description (URDF, xacro)', extensions: ['urdf', 'xacro'] }]
+
+/** Column-major 4x4 of a component pose (position mm, rotation vector in degrees). */
+function poseMatrix(position: number[], rotation: number[]) {
+  const r = new THREE.Vector3(...rotation)
+  const deg = r.length()
+  const m = deg > 1e-12 ? new THREE.Matrix4().makeRotationAxis(r.normalize(), (deg * Math.PI) / 180) : new THREE.Matrix4()
+  return m.setPosition(position[0], position[1], position[2])
+}
 
 export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
   const [asm, setAsm] = useState<AsmModel | null>(null)
@@ -40,8 +57,67 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
   const [clashes, setClashes] = useState<{ a: string; b: string; volume_mm3: number; center: number[] }[] | null>(null)
   const [markers, setMarkers] = useState<number[][]>([])
   const viewRef = useRef<ViewportHandle>(null)
+  const [report, setReport] = useState<UrdfReport | null>(null)
+  const [joints, setJoints] = useState<Record<string, number>>({})
+  const [poses, setPoses] = useState<Record<string, number[]>>({})
+  const busy = useRef(false)
+  const queued = useRef<Record<string, number> | null>(null)
+  const asmRef = useRef(asm)
+  asmRef.current = asm
 
-  const refresh = useCallback((m: AsmModel) => { setAsm(m); setClashes(null); setMarkers([]) }, [])
+  const refresh = useCallback((m: AsmModel) => {
+    setAsm(m); setClashes(null); setMarkers([]); setPoses({})
+    setJoints(Object.fromEntries((m.spec.robot?.joints ?? []).map((j) => [j.name, j.value])))
+  }, [])
+
+  // Joint dragging: send the latest values, one request at a time; move components by their pose change.
+  const sendJoints = useCallback(async (values: Record<string, number>) => {
+    if (busy.current) { queued.current = { ...(queued.current ?? {}), ...values }; return }
+    busy.current = true
+    try {
+      const r = await call<{ result: Result; joints: Joint[]; poses: Record<string, { position: number[]; rotation: number[] }> }>('/api/asm/joints', { values })
+      if (!r.result.ok) setStatus({ ok: false, text: r.result.message })
+      setJoints(Object.fromEntries(r.joints.map((j) => [j.name, j.value])))
+      const snap = asmRef.current
+      if (snap) {
+        const out: Record<string, number[]> = {}
+        for (const c of snap.components) {
+          const p = r.poses[c.id]
+          if (!p) continue
+          const delta = poseMatrix(p.position, p.rotation).multiply(poseMatrix(c.position, c.rotation).invert())
+          out[c.id] = delta.toArray()
+        }
+        setPoses(out)
+      }
+    } catch (e) { setStatus({ ok: false, text: (e as Error).message }) }
+    finally {
+      busy.current = false
+      const next = queued.current
+      queued.current = null
+      if (next) sendJoints(next)
+    }
+  }, [])
+  const moveJoint = (name: string, value: number) => { setJoints((j) => ({ ...j, [name]: value })); sendJoints({ [name]: value }) }
+  const home = () => {
+    const robot = asm?.spec.robot
+    if (!robot) return
+    const vals = Object.fromEntries(robot.joints.filter((j) => MOVABLE.includes(j.type) && !j.mimic)
+      .map((j) => [j.name, Math.min(Math.max(0, j.lower ?? -Infinity), j.upper ?? Infinity)]))
+    setJoints((j) => ({ ...j, ...vals }))
+    sendJoints(vals)
+  }
+  const importUrdf = async () => {
+    const path = desktop ? await desktop.openFileDialog('Import robot (URDF or xacro)', URDF) : window.prompt('Path to the .urdf or .xacro file on this computer')
+    if (!path) return
+    setStatus({ ok: true, text: `converting ${path.split('/').pop()}…` })
+    try {
+      const r = await call<{ model: AsmModel; report: UrdfReport; path: string }>('/api/asm/import_urdf', { path })
+      refresh(r.model)
+      setReport(r.report)
+      setStatus({ ok: true, text: `imported ${r.report.robot}: ${r.report.links} links, ${r.report.joints} joints → ${r.path}` })
+      setTimeout(() => viewRef.current?.view('iso'), 50)
+    } catch (e) { setStatus({ ok: false, text: (e as Error).message }) }
+  }
   useEffect(() => { call<AsmModel>('/api/asm').then(refresh).catch((e) => setStatus({ ok: false, text: e.message })) }, [refresh])
 
   const cmd = async (command: string, args: Record<string, unknown>) => {
@@ -113,6 +189,7 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
         <div className="group">
           {!desktop && <input placeholder="/path/to/part.aicad" value={partPath} onChange={(e) => setPartPath(e.target.value)} />}
           <button className="primary" onClick={insert}>＋ Insert part</button>
+          <button onClick={importUrdf} title="Convert a robot description (URDF or xacro) into parts and an assembly with movable joints">Import URDF</button>
         </div>
         <div className="group seg">
           {views.map((v) => <button key={v} onClick={() => viewRef.current?.view(v)}>{v}</button>)}
@@ -126,6 +203,27 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
       </header>
 
       <aside className="left">
+        {asm?.spec.robot && (
+          <section className="robot">
+            <h2>Robot · {asm.spec.robot.name} <button className="link" onClick={home} title="All joints to zero (within limits)">home</button></h2>
+            {asm.spec.robot.joints.filter((j) => MOVABLE.includes(j.type)).map((j) => {
+              const prism = j.type === 'prismatic'
+              const lo = j.lower ?? -180, hi = j.upper ?? 180
+              const m = j as Joint & { multiplier?: number; offset?: number }
+              const v = j.mimic ? (joints[j.mimic] ?? 0) * (m.multiplier ?? 1) + (m.offset ?? 0) : joints[j.name] ?? j.value
+              return (
+                <div key={j.name} className="joint">
+                  <div className="row small"><b>{j.name}</b><span className="muted">{j.type}{j.mimic ? ` · follows ${j.mimic}` : ''}</span>
+                    <span className="spacer" /><span className="jval">{fmt(v, prism ? 1 : 1)}{prism ? ' mm' : '°'}</span></div>
+                  <input type="range" aria-label={`joint ${j.name}`} min={lo} max={hi} step="any" value={v}
+                    disabled={!!j.mimic} onChange={(e) => moveJoint(j.name, Number(e.target.value))} />
+                </div>
+              )
+            })}
+            {asm.spec.robot.joints.some((j) => !MOVABLE.includes(j.type)) &&
+              <p className="muted small">{asm.spec.robot.joints.filter((j) => !MOVABLE.includes(j.type)).length} fixed joint(s) not shown.</p>}
+          </section>
+        )}
         <section>
           <h2>Components</h2>
           {!asm?.components.length && <p className="muted">Insert saved parts (.aicad or STEP). Save each part first.</p>}
@@ -134,7 +232,7 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
               <li key={c.id} className={selected === c.id ? 'selected' : ''} onClick={() => setSelected(c.id)} title={c.file}>
                 <span className="icon">{c.fixed ? '⚓' : '◇'}</span>
                 <span className="name">{c.id}</span>
-                <span className="type">{c.error ? <span className="err">missing</span> : c.name}</span>
+                <span className="type">{c.error ? <span className="err">missing</span> : c.link ? `link ${c.link}` : c.name}</span>
                 <span className="actions" onClick={(e) => e.stopPropagation()}>
                   <button className="link" title={c.fixed ? 'Make free' : 'Fix in place'} onClick={() => cmd('set_fixed', { id: c.id, fixed: !c.fixed })}>{c.fixed ? 'free' : 'fix'}</button>
                   <button className="link danger" onClick={() => cmd('remove_component', { id: c.id })}>✕</button>
@@ -158,7 +256,7 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
 
       <main className="center">
         <ErrorBoundary name="3D view">
-          <Viewport ref={viewRef} model={pseudo} mode="face" selection={selection} selectedFeature={selected} markers={markers}
+          <Viewport ref={viewRef} model={pseudo} mode="face" selection={selection} selectedFeature={selected} markers={markers} poses={poses}
             onPick={(r, add) => {
               if (!r) { if (!add) setSelection([]); return }
               setSelected(r.feature)
@@ -184,6 +282,30 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
               <label className="row small"><input type="checkbox" checked={aligned} onChange={(e) => setAligned(e.target.checked)} /> normals aligned</label>
             </div>
           </section>
+          {report && (
+            <section className="urdf-report">
+              <h2>URDF import · {report.robot} <button className="link" onClick={() => setReport(null)}>hide</button></h2>
+              <p className="small">{report.links} links, {report.joints} joints → <b>{report.parametric_parts}</b> editable parts (box, cylinder, sphere)
+                and <b>{report.mesh_parts}</b> solids from meshes. Files written to <code>{report.folder}</code>.</p>
+              {Object.entries(report.meshes).length > 0 && (
+                <ul className="findings">{Object.entries(report.meshes).map(([f, m]) => (
+                  <li key={f}><span>{f}: {m.triangles_in} triangles → {m.faces} faces{m.decimated_to ? ` (reduced to ${m.decimated_to})` : ''}</span>
+                    <span className={m.closed ? 'ok' : 'warn'}>{m.closed ? 'solid' : 'surfaces'}</span></li>))}</ul>
+              )}
+              {report.skipped.map((t, i) => <p key={i} className="err small">Skipped: {t}</p>)}
+              {report.warnings.map((t, i) => <p key={i} className="warn small">{t}</p>)}
+              {report.masses.length > 0 && (
+                <table className="dims">
+                  <thead><tr><th>link</th><th>URDF mass</th><th>CAD volume</th><th>implied density</th></tr></thead>
+                  <tbody>{report.masses.map((m) => <tr key={m.link}><td>{m.link}</td><td>{fmt(m.mass_kg, 3)} kg</td>
+                    <td>{m.cad_volume_mm3 != null ? `${fmt(m.cad_volume_mm3 / 1000, 1)} cm³` : '—'}</td>
+                    <td className={m.implied_density != null && (m.implied_density < 200 || m.implied_density > 20000) ? 'warn' : ''}>{m.implied_density != null ? `${m.implied_density} kg/m³` : '—'}</td></tr>)}</tbody>
+                </table>
+              )}
+              <p className="muted small">Mesh parts keep their shape but have no feature history, so only box, cylinder and sphere links are parametric.
+                Visual meshes often overlap at the joints, which the interference check will show.</p>
+            </section>
+          )}
           {comp && !comp.error && (
             <section>
               <h2>{comp.id} <span className="muted">{comp.name}</span></h2>
@@ -217,6 +339,8 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
     </div>
   )
 }
+
+const MOVABLE = ['revolute', 'continuous', 'prismatic']
 
 function TransformEditor({ comp, onApply }: { comp: Comp; onApply: (p: number[], r: number[]) => void }) {
   const [p, setP] = useState(comp.position.map((v) => String(Number(v.toFixed(4)))))

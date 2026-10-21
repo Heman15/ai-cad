@@ -49,6 +49,7 @@ export interface FaceEntity {
   component?: string
   local_point?: number[]
   local_normal?: number[] | null
+  color?: string | null
   vertices: number[]
   triangles: number[]
 }
@@ -61,6 +62,7 @@ export interface EdgeEntity {
   length: number
   radius?: number
   center?: number[]
+  component?: string
   polyline: number[]
 }
 

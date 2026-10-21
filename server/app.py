@@ -551,6 +551,7 @@ class AsmState:
 
 A = AsmState()
 _ASM_MESH_CACHE: dict[str, Any] = {}
+BIG_SHAPE_FACES = 1500
 
 
 def _asm():
@@ -572,8 +573,18 @@ def _local_entities(path: str, shape) -> dict[str, Any]:
     key = f"{path}:{hashlib.sha256(Path(path).read_bytes()).hexdigest() if Path(path).exists() else ''}"
     if key in _ASM_MESH_CACHE:
         return _ASM_MESH_CACHE[key]
+    all_faces = shape.Faces()
+    if len(all_faces) > BIG_SHAPE_FACES:  # e.g. an organic mesh: one surface, no per-face picking or edges
+        verts, tris = shape.tessellate(0.05, 0.2)
+        bb = shape.BoundingBox()
+        out = {"faces": [{"index": 0, "type": "MESH", "point": list(bb.center.toTuple()), "area": round(shape.Area(), 3),
+                          "center": list(bb.center.toTuple()),
+                          "vertices": [c for v in verts for c in v.toTuple()], "triangles": [k for t in tris for k in t]}],
+               "edges": []}
+        _ASM_MESH_CACHE[key] = out
+        return out
     faces = []
-    for i, f in enumerate(shape.Faces()):
+    for i, f in enumerate(all_faces):
         verts, tris = f.tessellate(0.05, 0.2)
         info = _face_info(f, _point_on(f, verts, tris))
         faces.append({"index": i, **info, "vertices": [c for v in verts for c in v.toTuple()], "triangles": [k for t in tris for k in t]})
@@ -595,7 +606,8 @@ def asm_snapshot() -> dict[str, Any]:
     comps, faces, edges = [], [], []
     for c in a.spec.components:
         path = resolve_path(a.path, c.file)
-        entry = {"id": c.id, "file": c.file, "fixed": c.fixed, "position": c.position, "rotation": c.rotation}
+        entry = {"id": c.id, "file": c.file, "fixed": c.fixed, "position": c.position, "rotation": c.rotation,
+                 "link": c.link, "color": c.color}
         try:
             info = CACHE.load(path)
         except Exception as e:  # missing or broken part file: report, keep the rest working
@@ -607,12 +619,12 @@ def asm_snapshot() -> dict[str, Any]:
         tf = lambda xs: (np.asarray(xs).reshape(-1, 3) @ R.T + t).ravel().round(5).tolist()  # noqa: E731
         local = _local_entities(str(path), info["shape"])
         for f in local["faces"]:
-            faces.append({**f, "index": len(faces), "feature": c.id, "component": c.id,
+            faces.append({**f, "index": len(faces), "feature": c.id, "component": c.id, "color": c.color,
                           "local_point": f["point"], "local_normal": f.get("normal"),
                           "point": tf(f["point"]), "normal": (np.asarray(f["normal"]) @ R.T).round(6).tolist() if f.get("normal") else None,
                           "vertices": tf(f["vertices"])})
         for e in local["edges"]:
-            edges.append({**e, "index": len(edges), "feature": c.id, "point": tf(e["point"]), "polyline": tf(e["polyline"])})
+            edges.append({**e, "index": len(edges), "feature": c.id, "component": c.id, "point": tf(e["point"]), "polyline": tf(e["polyline"])})
     try:
         bom = a.bom()
     except Exception:
@@ -668,6 +680,46 @@ def asm_open(body: PathIn):
     with LOCK:
         A.project = proj
         return {"model": asm_snapshot()}
+
+
+class UrdfIn(BaseModel):
+    path: str
+    out_dir: str | None = None
+    geometry: str = "visual"
+
+
+@app.post("/api/asm/import_urdf")
+def asm_import_urdf(body: UrdfIn):
+    """Convert a URDF/xacro into part files plus an assembly (written next to the URDF unless out_dir is given), then open it."""
+    from cadcore.assembly import AssemblyError, AssemblyProject
+    from cadcore.urdf import import_urdf
+
+    if body.geometry not in ("visual", "collision"):
+        raise HTTPException(400, "geometry must be 'visual' or 'collision'")
+    try:
+        r = import_urdf(body.path, body.out_dir, body.geometry)
+        proj = AssemblyProject.load(r["assembly"])
+    except AssemblyError as e:
+        raise HTTPException(400, str(e))
+    except OSError as e:
+        raise HTTPException(400, f"could not write the converted files: {e}")
+    with LOCK:
+        A.project = proj
+        return {"model": asm_snapshot(), "report": r["report"], "path": r["assembly"]}
+
+
+class JointsIn(BaseModel):
+    values: dict[str, float]
+
+
+@app.post("/api/asm/joints")
+def asm_joints(body: JointsIn):
+    """Move robot joints (degrees / mm). No undo step; returns only the new component poses, for smooth dragging."""
+    with LOCK:
+        a = _asm()
+        r = a.move_joints(body.values)
+        return {"result": r, "joints": a.spec.robot["joints"] if a.spec.robot else [],
+                "poses": {c.id: {"position": c.position, "rotation": c.rotation} for c in a.spec.components}}
 
 
 @app.post("/api/asm/save")

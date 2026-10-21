@@ -19,6 +19,7 @@ Describe a part or drop in a drawing. The assistant asks for whatever it needs, 
 | **Analysis** | Linear-static FEA (quadratic tetrahedra) validated against beam theory; manufacturability checks for CNC milling, FDM printing and sheet metal |
 | **Sheet metal** | Base and edge flanges with real bends, corner-collision checks, flat pattern with bend allowance, DXF export |
 | **Assemblies** | Parts linked by file, mates (coincident, distance, parallel, concentric), interference check, bill of materials, STEP export |
+| **Robots (URDF)** | Import URDF or xacro: box/cylinder/sphere links become editable parts, STL/OBJ/DAE meshes become solids (flat faces recovered), joints become sliders with limits and mimic joints; export the posed robot to STEP |
 | **Desktop app** | SolidWorks-style ribbon, FeatureManager tree, heads-up view toolbar, light and dark themes. Runs locally (Electron + Python); projects are plain JSON; STEP/STL export |
 
 | Constraint sketcher | Drawing → CAD, traceable |
@@ -28,6 +29,10 @@ Describe a part or drop in a drawing. The assistant asks for whatever it needs, 
 | ![Drawing](docs/images/drawing-gdt.png) | ![Assembly](docs/images/assembly.png) |
 | **Manufacturability and FEA** | **Sheet-metal flat pattern** |
 | ![Analysis](docs/images/analysis.png) | ![Flat pattern](docs/images/flat-pattern.png) |
+
+**Robot imported from URDF/xacro, joints posed with sliders** (try `examples/robot_arm/urdf/demo_arm.urdf.xacro`)
+
+![Robot from URDF](docs/images/robot-urdf.png)
 
 ## Install (Linux)
 
@@ -66,7 +71,7 @@ You can also drive the app **from Claude Code itself**: run `scripts/setup-claud
 - **Not yet supported:**
   - draft and rib features, variable fillets, surfacing;
   - sheet-metal flanges on flanges and hems;
-  - assemblies are rigid only, with no motion study;
+  - assemblies have no motion study or dynamics (URDF joints can be posed, not simulated); meshes imported from URDF aren't parametric;
   - section views on drawings.
 - **Status:** see [docs/ROADMAP.md](docs/ROADMAP.md) for what's verified, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it works.
 

@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>demo_arm</name>
+  <version>0.1.0</version>
+  <description>AI CAD URDF import example</description>
+  <maintainer email="none@example.com">AI CAD</maintainer>
+  <license>AGPL-3.0-or-later</license>
+</package>
