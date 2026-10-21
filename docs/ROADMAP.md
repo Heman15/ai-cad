@@ -132,3 +132,11 @@ Windows and macOS installers are not built. The code is portable, but the script
     - an Assistant tab in the Assembly workspace, with live sync.
   - **Verified end to end:** one chat message ("bring in the AiNex, raise its right arm, turn its head") made Claude Code find the repository, download 8 MB, import, pose and report the licence.
   - **Tests:** 87 unit/API tests and 6 UI suites pass.
+- **2026-10-21:** Closed the main SolidWorks part-modelling gaps:
+  - **Draft:** OCC `BRepOffsetAPI_DraftAngle` about a neutral plane (base plane or face) and a pull direction; ±45° limit; faces perpendicular to the pull, or that the kernel cannot taper, are named by position. A 40 × 40 × 20 block drafted 5° matches ∫(a − 2z·tan θ)² dz to 1e-9, and the measured face angle is 5.000°.
+  - **Rib:** from an open sketch line or points; parallel to the sketch (filled in the plane up to the part, ends extended along the line) or normal to it (grown along the normal to the part); both/one-sided thickness. It fails clearly when it doesn't reach material. An L-bracket gusset adds exactly ½·55·35·4 mm³.
+  - **Variable-radius fillet:** one edge, r1 → r2 plus optional intermediate radii (`BRepFilletAPI_MakeFillet` with a radius law); the end that gets r1 can be picked with a vertex. The measured radius at both ends and the middle matches to 0.01 mm.
+  - **Hole Wizard:** ISO 273 clearance (close/normal/loose), tapped (ISO 2306 tap drills, coarse and fine pitches, cosmetic thread), counterbore for ISO 4762 (DIN 974-1 Ø, head-height depth), and 90° countersink for ISO 10642. Unknown sizes are rejected. Drawing callouts name the screw standard.
+  - **Section views:** `sections` on `make_drawing`, `/api/drawing.*`, MCP `render_views`/`export_file` and the drawing dialog. Each is a full section on an XY/YZ/XZ plane (default through the middle) with 45° hatching of the cut faces (holes stay unhatched), a cutting-plane line with arrows and letters on the view that sees it edge-on, and placement that avoids the other views (the scale drops if needed).
+  - **Sheet-metal hems:** open (gap) and closed hems on base-flange edges, collision-checked, unfolded in the flat pattern with BA = π·(R + K·t).
+  - **Tests:** `test_features_more.py` (17), 104 unit/API tests pass. The Chrome UI suites weren't rerun for these dialogs yet.

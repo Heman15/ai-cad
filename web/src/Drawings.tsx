@@ -102,19 +102,26 @@ export function SourceDrawingPanel({ model, run, onInterpret, onImport, aiReady 
   )
 }
 
+type SectionRow = { plane: string; offset: string; flip: boolean }
+
 export function DrawingDialog({ model, onClose, setStatus }: { model: Model; onClose: () => void; setStatus: (s: { ok: boolean; text: string }) => void }) {
   const [sheet, setSheet] = useState('A3')
   const [projection, setProjection] = useState('first')
   const [compare, setCompare] = useState(false)
+  const [sections, setSections] = useState<SectionRow[]>([])
+  const [error, setError] = useState<string | null>(null)
   const source = model.spec.source?.drawing as { sha256: string } | undefined
+  const sectionSpec = sections.map((r) => ({ plane: r.plane, ...(r.offset.trim() && !isNaN(+r.offset) ? { offset: +r.offset } : {}), ...(r.flip ? { flip: true } : {}) }))
   const q = `sheet=${sheet}&projection=${projection}&v=${encodeURIComponent(String(model.volume_mm3))}`
+    + (sectionSpec.length ? `&sections=${encodeURIComponent(JSON.stringify(sectionSpec))}` : '')
+  const setRow = (i: number, patch: Partial<SectionRow>) => setSections(sections.map((r, j) => (j === i ? { ...r, ...patch } : r)))
 
   const save = async (ext: 'pdf' | 'svg') => {
     const name = `${model.spec.name || 'part'}_drawing.${ext}`
     if (desktop) {
       const path = await desktop.saveExportDialog(name, ext)
       if (!path) return
-      const r = await fetch('/api/drawing/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, sheet, projection }) })
+      const r = await fetch('/api/drawing/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, sheet, projection, sections: sectionSpec }) })
       const d = await r.json()
       setStatus({ ok: r.ok, text: r.ok ? d.message : d.detail })
     } else {
@@ -135,11 +142,31 @@ export function DrawingDialog({ model, onClose, setStatus }: { model: Model; onC
             <button onClick={onClose}>Close</button>
           </span>
         </h2>
+        <div className="row small section-rows">
+          <span className="muted">Sections:</span>
+          {sections.map((r, i) => (
+            <span key={i} className="row">
+              <b>{'ABCDEFGH'[i]}-{'ABCDEFGH'[i]}</b>
+              <select value={r.plane} onChange={(e) => setRow(i, { plane: e.target.value })}>
+                <option value="XZ">XZ plane (seen from the front)</option><option value="YZ">YZ plane (seen from the side)</option><option value="XY">XY plane (seen from the top)</option>
+              </select>
+              <input style={{ width: '6em' }} value={r.offset} placeholder="middle" title="Offset along the plane's normal axis (mm); blank = through the middle" onChange={(e) => setRow(i, { offset: e.target.value })} />
+              <label className="row"><input type="checkbox" checked={r.flip} onChange={(e) => setRow(i, { flip: e.target.checked })} /> flip</label>
+              <button className="link danger" onClick={() => setSections(sections.filter((_, j) => j !== i))}>✕</button>
+            </span>
+          ))}
+          {sections.length < 4 && <button onClick={() => setSections([...sections, { plane: 'XZ', offset: '', flip: false }])}>+ Section view</button>}
+        </div>
+        {error && <p className="err small">{error}</p>}
         <div className={`drawing-views ${compare ? 'two' : ''}`}>
-          <img src={`/api/drawing.svg?${q}`} alt="generated drawing" />
+          <img src={`/api/drawing.svg?${q}`} alt="generated drawing" onLoad={() => setError(null)} onError={async () => {
+            const r = await fetch(`/api/drawing.svg?${q}`)
+            const d = await r.json().catch(() => null)
+            setError(d?.detail ?? 'The drawing could not be generated.')
+          }} />
           {compare && source && <img src={`/api/source-drawing/page/1?v=${source.sha256}`} alt="source drawing" />}
         </div>
-        <p className="muted small">Views are exact hidden-line projections of the solid. Dimensions shown: overall size, hole positions and hole callouts.
+        <p className="muted small">Views are exact hidden-line projections of the solid. Section views hatch the cut faces and mark the cutting plane with arrows and letters on the view that sees it edge-on. Dimensions shown: overall size, hole positions and hole callouts.
           Tolerances, surface finish and other annotations are not generated; add them before manufacture.</p>
       </div>
     </div>

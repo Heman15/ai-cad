@@ -10,14 +10,14 @@ Describe a part or drop in a drawing. The assistant asks for whatever it needs, 
 
 | | |
 |---|---|
-| **Parametric modelling** | Feature tree containing: constraint sketches, extrude/cut, revolve, sweep, loft, holes (counterbore, countersink, tapped), threads, fillet, chamfer, shell, patterns, mirror. Variables with formulas (`=width/2 - 5`) and units (`2 in`) |
+| **Parametric modelling** | Feature tree containing: constraint sketches, extrude/cut, revolve, sweep, loft, holes (counterbore, countersink, tapped) and an ISO Hole Wizard, threads, fillet, variable-radius fillet, chamfer, shell, draft, rib, patterns, mirror. Variables with formulas (`=width/2 - 5`) and units (`2 in`) |
 | **Measure** | Point-to-point, edge, face and hole-centre distances with dX/dY/dZ, angles, diameters and areas, drawn as dimensions in the 3D view; overall part dimensions on demand |
 | **Constraint sketcher** | Lines, arcs, circles and splines; 13 constraint types plus dimensions; a fixed origin; live degree-of-freedom and conflict reporting |
 | **AI assistant** | Builds and edits through validated tools, asks about missing dimensions, records requirements separately from assumptions, and proposes redesign alternatives you accept with one click |
 | **Drawing → CAD** | Import a PDF or image. Every dimension is traced to its spot on the drawing and to the model parameter it drives; mismatches are flagged and you can correct them there |
-| **2D drawings** | Hidden-line views (first or third angle) with dimensions, hole and thread callouts, ISO 286 fits, ISO 2768, GD&T frames, datums and surface finish. PDF/SVG export |
+| **2D drawings** | Hidden-line views (first or third angle) with dimensions, hatched section views, hole and thread callouts, ISO 286 fits, ISO 2768, GD&T frames, datums and surface finish. PDF/SVG export |
 | **Analysis** | Linear-static FEA (quadratic tetrahedra) validated against beam theory; manufacturability checks for CNC milling, FDM printing and sheet metal |
-| **Sheet metal** | Base and edge flanges with real bends, corner-collision checks, flat pattern with bend allowance, DXF export |
+| **Sheet metal** | Base and edge flanges and open/closed hems with real bends, corner-collision checks, flat pattern with bend allowance, DXF export |
 | **Assemblies** | Parts linked by file, mates (coincident, distance, parallel, concentric), interference check, bill of materials, STEP export |
 | **Robots (URDF)** | Import URDF or xacro: box/cylinder/sphere links become editable parts, STL/OBJ/DAE meshes become solids (flat faces recovered), joints become sliders with limits and mimic joints; export the posed robot to STEP |
 | **Desktop app** | SolidWorks-style ribbon, FeatureManager tree, heads-up view toolbar, light and dark themes. Runs locally (Electron + Python); projects are plain JSON; STEP/STL export |
@@ -71,10 +71,11 @@ You can also drive the app **from Claude Code itself**: run `scripts/setup-claud
 - **AI accuracy:** the AI paths have so far been tested with scripted models and a few live runs, not yet benchmarked on large sets of real drawings. Always review the AI's assumptions and check dimensions before manufacturing.
 - **Analysis scope:** linear static only. No fatigue, buckling, contact or thermal analysis. Material values are typical handbook figures.
 - **Not yet supported:**
-  - draft and rib features, variable fillets, surfacing;
-  - sheet-metal flanges on flanges and hems;
+  - surfacing; parting-line and step drafts (draft uses a neutral plane); a variable fillet works on one edge (and its tangent chain) at a time;
+  - Hole Wizard standards other than ISO metric (no ANSI inch, pipe threads or ISO 7380/7046 heads);
+  - sheet-metal flanges on flanges, and hems on flanges (hems attach to base-flange edges only); closed hems keep a 0.02 mm gap;
   - assemblies have no motion study or dynamics (URDF joints can be posed, not simulated); meshes imported from URDF aren't parametric;
-  - section views on drawings.
+  - section views are full sections on the XY/YZ/XZ planes (no offset/aligned/half sections or detail views) and are not dimensioned.
 - **Status:** see [docs/ROADMAP.md](docs/ROADMAP.md) for what's verified, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it works.
 
 ## Tests

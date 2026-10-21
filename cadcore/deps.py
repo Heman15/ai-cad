@@ -31,7 +31,7 @@ def feature_dependencies(spec: PartSpec) -> dict[str, dict[str, Any]]:
         for key in ("feature", "sketch"):
             if isinstance(p.get(key), str):
                 refs.add(p[key])
-        for key in ("edges", "faces"):
+        for key in ("edges", "faces", "edge"):
             sel = p.get(key)
             if isinstance(sel, str) and sel.startswith("feature:"):
                 refs.add(sel.split(":", 1)[1])
@@ -39,7 +39,9 @@ def feature_dependencies(spec: PartSpec) -> dict[str, dict[str, Any]]:
             vars_ |= names_in(s) & set(spec.variables)
         plane = p.get("plane")
         geometry = isinstance(plane, dict) and ("face" in plane or "face_at" in plane)
-        geometry = geometry or f.type in ("fillet", "chamfer", "shell")
+        neutral = p.get("neutral_plane")
+        geometry = geometry or (isinstance(neutral, dict) and ("face" in neutral or "face_at" in neutral))
+        geometry = geometry or f.type in ("fillet", "chamfer", "shell", "draft", "variable_fillet", "rib", "sheet_hem")
         out[f.id] = {"features": sorted(refs), "variables": sorted(vars_), "geometry": geometry}
     return out
 

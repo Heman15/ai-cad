@@ -9,7 +9,8 @@ import { parseValue, type Run } from './panels'
 export type DialogKind =
   | 'template' | 'extrude' | 'cut' | 'revolve' | 'hole' | 'fillet' | 'chamfer' | 'shell'
   | 'pattern_linear' | 'pattern_circular' | 'mirror' | 'sweep' | 'loft' | 'thread'
-  | 'sheet_setup' | 'sheet_base' | 'sheet_flange'
+  | 'sheet_setup' | 'sheet_base' | 'sheet_flange' | 'sheet_hem'
+  | 'draft' | 'rib' | 'variable_fillet' | 'hole_wizard'
 
 export const DIALOGS: { kind: DialogKind; label: string; needsSolid: boolean }[] = [
   { kind: 'template', label: 'Create from template', needsSolid: false },
@@ -19,6 +20,10 @@ export const DIALOGS: { kind: DialogKind; label: string; needsSolid: boolean }[]
   { kind: 'sweep', label: 'Sweep (profile along path)', needsSolid: false },
   { kind: 'loft', label: 'Loft (through sections)', needsSolid: false },
   { kind: 'hole', label: 'Hole', needsSolid: true },
+  { kind: 'hole_wizard', label: 'Hole Wizard (ISO standard holes)', needsSolid: true },
+  { kind: 'rib', label: 'Rib (from an open line)', needsSolid: true },
+  { kind: 'draft', label: 'Draft (taper faces)', needsSolid: true },
+  { kind: 'variable_fillet', label: 'Variable-radius fillet', needsSolid: true },
   { kind: 'fillet', label: 'Fillet', needsSolid: true },
   { kind: 'chamfer', label: 'Chamfer', needsSolid: true },
   { kind: 'shell', label: 'Shell', needsSolid: true },
@@ -29,9 +34,26 @@ export const DIALOGS: { kind: DialogKind; label: string; needsSolid: boolean }[]
   { kind: 'sheet_setup', label: 'Sheet metal: parameters', needsSolid: false },
   { kind: 'sheet_base', label: 'Sheet metal: base flange', needsSolid: false },
   { kind: 'sheet_flange', label: 'Sheet metal: edge flange', needsSolid: true },
+  { kind: 'sheet_hem', label: 'Sheet metal: hem', needsSolid: true },
 ]
 
 const NAMED_FACES: Record<string, string> = { top: '>Z', bottom: '<Z', front: '<Y', back: '>Y', left: '<X', right: '>X' }
+
+// Hole Wizard sizes per type (the backend tables in cadcore/holes.py are authoritative and reject anything else)
+const WIZARD_SIZES: Record<string, string[]> = {
+  clearance: ['M1.6', 'M2', 'M2.5', 'M3', 'M4', 'M5', 'M6', 'M8', 'M10', 'M12', 'M14', 'M16', 'M18', 'M20', 'M22', 'M24', 'M27', 'M30', 'M33', 'M36'],
+  counterbore: ['M3', 'M4', 'M5', 'M6', 'M8', 'M10', 'M12', 'M14', 'M16', 'M20', 'M24', 'M30', 'M36'],
+  countersink: ['M3', 'M4', 'M5', 'M6', 'M8', 'M10', 'M12', 'M14', 'M16', 'M20'],
+  tapped: ['M1.6', 'M2', 'M2.5', 'M3', 'M4', 'M5', 'M6', 'M8', 'M10', 'M12', 'M14', 'M16', 'M18', 'M20', 'M22', 'M24', 'M27', 'M30', 'M36',
+    'M3x0.35', 'M4x0.5', 'M5x0.5', 'M6x0.75', 'M8x1', 'M10x1.25', 'M10x1', 'M12x1.5', 'M12x1.25', 'M14x1.5', 'M16x1.5', 'M18x1.5',
+    'M20x1.5', 'M20x2', 'M22x1.5', 'M24x2', 'M27x2', 'M30x2', 'M36x3'],
+}
+const WIZARD_NOTE: Record<string, string> = {
+  clearance: 'Clearance hole per ISO 273 (close / normal / loose = fine / medium / coarse series).',
+  counterbore: 'Counterbore for an ISO 4762 socket head cap screw: Ø per DIN 974-1, depth = head height (head flush).',
+  countersink: '90° countersink for an ISO 10642 countersunk screw: Ø = theoretical head Ø (head flush).',
+  tapped: 'Tap drill per ISO 2306 (coarse) or d − P (fine), with a cosmetic thread.',
+}
 
 type Shape = Record<string, string>
 const SHAPE_FIELDS: Record<string, string[]> = {
@@ -64,12 +86,13 @@ export default function FeatureDialog({ kind, model, selection, run, onClose }: 
   const selFace = selection.find((s) => s.kind === 'face' && s.type === 'PLANE')
   const selEdges = selection.filter((s) => s.kind === 'edge')
   const selFaces = selection.filter((s) => s.kind === 'face')
+  const selVertex = selection.find((s) => s.kind === 'vertex')
   const sketches = (model?.spec.features ?? []).filter((f) => f.type === 'sketch' && !f.params.path_only)
   const pathSketches = (model?.spec.features ?? []).filter((f) => f.type === 'sketch')
   const selCyl = selection.find((s) => s.kind === 'face' && s.type === 'CYLINDER')
   const toolFeatures = (model?.spec.features ?? []).filter((f) => ['extrude', 'revolve', 'hole', 'pattern_linear', 'pattern_circular', 'mirror'].includes(f.type))
 
-  const [id, setId] = useState(() => nextId(model, kind === 'cut' ? 'cut' : kind === 'template' ? 'part' : kind))
+  const [id, setId] = useState(() => nextId(model, kind === 'cut' ? 'cut' : kind === 'template' ? 'part' : kind === 'hole_wizard' ? 'hole' : kind))
   const [v, setV] = useState<Record<string, string>>(() => ({
     template: 'plate', length: '100', width: '60', thickness: '5', height: '60', segments: '20x30, 12x50',
     od: '100', id_: '40', pcd: '75', n: '6', bolt_d: '9',
@@ -85,6 +108,11 @@ export default function FeatureDialog({ kind, model, selection, run, onClose }: 
     transition: 'right', op: 'add', sections: sketches.map((f) => f.id).join(', '), ruled: '',
     sm_t: String(model?.spec.sheet?.thickness ?? 2), sm_r: String(model?.spec.sheet?.bend_radius ?? 2), sm_k: String(model?.spec.sheet?.k_factor ?? 0.44),
     fl_len: '20', fl_angle: '90', fl_dir: 'up', fl_ts: '0', fl_te: '0', fl_r: '',
+    hem_type: 'closed', hem_gap: '1', hem_len: '10',
+    dr_faces: selFaces.length ? 'selected' : '#Z', dr_angle: '3', nplane: 'XY', noffset: '0', dr_flip: '',
+    rib_src: pathSketches.find((f) => f.params.path_only)?.id ?? 'points', rib_points: '5,40; 60,5', rib_t: '4', rib_dir: 'parallel', rib_side: 'both', rib_flip: '',
+    r1: '2', r2: '5', vf_points: '', vf_rev: '',
+    hw_type: 'counterbore', hw_size: 'M6', hw_fit: 'normal',
   }))
   const [shapes, setShapes] = useState<Shape[]>([
     kind === 'revolve' ? { type: 'rect', w: '10', h: '40', x: '15', y: '20', mode: 'add' } : { type: 'rect', w: '40', h: '20', x: '0', y: '0', mode: 'add' },
@@ -165,6 +193,30 @@ export default function FeatureDialog({ kind, model, selection, run, onClose }: 
         if (!edge) { setError('Select a straight edge of the base flange first (Edge pick mode).'); return }
         params = { edge: { near: edge.point }, length: num(v.fl_len)!, angle: num(v.fl_angle)!, direction: v.fl_dir,
           trim_start: num(v.fl_ts) ?? 0, trim_end: num(v.fl_te) ?? 0, ...(v.fl_r.trim() ? { bend_radius: num(v.fl_r)! } : {}) }
+      } else if (kind === 'sheet_hem') {
+        const edge = selEdges[0]
+        if (!edge) { setError('Select a straight edge of the base flange first (Edge pick mode).'); return }
+        params = { edge: { near: edge.point }, type: v.hem_type, length: num(v.hem_len)!, direction: v.fl_dir,
+          trim_start: num(v.fl_ts) ?? 0, trim_end: num(v.fl_te) ?? 0, ...(v.hem_type === 'open' ? { gap: num(v.hem_gap)! } : {}) }
+      } else if (kind === 'hole_wizard') {
+        type = 'hole'
+        params = { plane: planeSpec(), positions: parsePairs(v.positions), depth: num(v.depth) ?? 'through',
+          standard: 'ISO', type: v.hw_type, size: v.hw_size, ...(v.hw_type === 'tapped' ? {} : { fit: v.hw_fit }) }
+        if (v.hw_type === 'tapped' && v.thread_depth.trim()) params.thread_depth = num(v.thread_depth)!
+      } else if (kind === 'draft') {
+        const faces: Json = v.dr_faces === 'selected' ? selFaces.map((s) => ({ point: s.point, ...(s.normal ? { normal: s.normal } : {}) })) : v.dr_faces
+        const neutral: Json = v.nplane in NAMED_FACES ? { face: NAMED_FACES[v.nplane] } : { base: v.nplane, offset: num(v.noffset) ?? 0 }
+        params = { faces, angle: num(v.dr_angle)!, neutral_plane: neutral, ...(v.dr_flip === 'yes' ? { flip: true } : {}) }
+      } else if (kind === 'rib') {
+        params = v.rib_src === 'points' ? { plane: planeSpec(), points: parsePairs(v.rib_points) } : { sketch: v.rib_src }
+        Object.assign(params, { thickness: num(v.rib_t)!, direction: v.rib_dir, side: v.rib_side, ...(v.rib_flip === 'yes' ? { flip: true } : {}) })
+      } else if (kind === 'variable_fillet') {
+        const edge = selEdges[0]
+        if (!edge || selEdges.length !== 1) { setError('Select exactly one edge first (Edge pick mode).'); return }
+        params = { edge: { near: edge.point }, r1: num(v.r1)!, r2: num(v.r2)! }
+        if (selVertex) params.start = selVertex.point
+        if (v.vf_points.trim()) params.points = parsePairs(v.vf_points)
+        if (v.vf_rev === 'yes') params.reverse = true
       } else if (kind === 'fillet') {
         params = { edges: selector('edges', v.edges), radius: num(v.radius)! }
       } else if (kind === 'chamfer') {
@@ -377,6 +429,95 @@ export default function FeatureDialog({ kind, model, selection, run, onClose }: 
                 <label>geometry<select value={v.modeled} onChange={set('modeled')}><option value="">cosmetic (annotation)</option><option value="yes">modelled helix</option></select></label>
               </div>
               <p className="muted small">External threads need the face at the major diameter; internal threads need the tap-drill diameter.</p>
+            </>
+          )}
+
+          {kind === 'hole_wizard' && (
+            <>
+              {planeField(true)}
+              <div className="grid3">
+                <label>hole type<select value={v.hw_type} onChange={(e) => {
+                  const t = e.target.value
+                  setV({ ...v, hw_type: t, hw_size: WIZARD_SIZES[t].includes(v.hw_size) ? v.hw_size : WIZARD_SIZES[t][0] })
+                }}>
+                  <option value="counterbore">counterbore (ISO 4762)</option><option value="countersink">countersink (ISO 10642)</option>
+                  <option value="clearance">clearance (ISO 273)</option><option value="tapped">tapped</option>
+                </select></label>
+                <label>size<select value={v.hw_size} onChange={set('hw_size')}>{WIZARD_SIZES[v.hw_type].map((x) => <option key={x}>{x}</option>)}</select></label>
+                {v.hw_type !== 'tapped' && <label>fit<select value={v.hw_fit} onChange={set('hw_fit')}><option value="close">close</option><option value="normal">normal</option><option value="loose">loose</option></select></label>}
+                {field('depth', 'depth or "through"')}
+                {v.hw_type === 'tapped' && field('thread_depth', 'thread depth', 'full')}
+              </div>
+              {field('positions', 'Positions "u,v; u,v; …"', '10,10; 90,10; =length-10,=width-10')}
+              <p className="muted small">{WIZARD_NOTE[v.hw_type]}</p>
+            </>
+          )}
+
+          {kind === 'draft' && (
+            <>
+              <label>Faces to draft
+                <select value={v.dr_faces === 'selected' ? 'selected' : 'selector'} onChange={(e) => setV({ ...v, dr_faces: e.target.value === 'selected' ? 'selected' : '#Z' })}>
+                  {selFaces.length > 0 && <option value="selected">{selFaces.length} selected face(s)</option>}
+                  <option value="selector">selector</option>
+                </select>
+              </label>
+              {v.dr_faces !== 'selected' && field('dr_faces', 'Selector', '#Z = all faces parallel to Z')}
+              <div className="grid3">
+                {field('dr_angle', 'draft angle °')}
+                <label>neutral plane<select value={v.nplane} onChange={set('nplane')}>
+                  {['XY', 'YZ', 'XZ'].map((p) => <option key={p} value={p}>{p} plane</option>)}
+                  {Object.keys(NAMED_FACES).map((f) => <option key={f} value={f}>{f} face of part</option>)}
+                </select></label>
+                {['XY', 'YZ', 'XZ'].includes(v.nplane) && field('noffset', 'plane offset')}
+                <label>pull direction<select value={v.dr_flip} onChange={set('dr_flip')}><option value="">plane normal / into the part</option><option value="yes">reversed</option></select></label>
+              </div>
+              <p className="muted small">Faces keep their size on the neutral plane; a positive angle narrows the part along the pull direction. Faces that cannot be tapered are listed by position.</p>
+            </>
+          )}
+
+          {kind === 'rib' && (
+            <>
+              <label>Rib line
+                <select value={v.rib_src} onChange={set('rib_src')}>
+                  {pathSketches.filter((f) => f.params.path_only).map((f) => <option key={f.id} value={f.id}>sketch {f.id}</option>)}
+                  <option value="points">points on a plane…</option>
+                </select>
+              </label>
+              {v.rib_src === 'points' && <>{planeField(true)}{field('rib_points', 'Open line "u,v; u,v; …"')}</>}
+              <div className="grid3">
+                {field('rib_t', 'thickness')}
+                <label>direction<select value={v.rib_dir} onChange={set('rib_dir')}><option value="parallel">parallel to sketch</option><option value="normal">normal to sketch</option></select></label>
+                <label>thickness side<select value={v.rib_side} onChange={set('rib_side')}><option value="both">both sides</option><option value="first">first side</option><option value="second">second side</option></select></label>
+                <label>region<select value={v.rib_flip} onChange={set('rib_flip')}><option value="">smaller enclosed side</option><option value="yes">other side</option></select></label>
+              </div>
+              <p className="muted small">The line is extended to the part; the rib fills the region it closes off with the part, and fails if it does not reach material.
+                Sketches made with "use as a sweep path or rib" are listed.</p>
+            </>
+          )}
+
+          {kind === 'variable_fillet' && (
+            <>
+              <p className={selEdges.length === 1 ? 'small' : 'warn small'}>{selEdges.length === 1 ? `Edge of ${selEdges[0].feature ?? 'part'} selected (${(selEdges[0].length ?? 0).toFixed(1)} mm).` : 'Select exactly one edge (Edge mode).'}
+                {selVertex ? ' r1 starts at the selected vertex.' : ' Optionally also select a vertex at the end where r1 applies.'}</p>
+              <div className="grid3">
+                {field('r1', 'start radius r1')}{field('r2', 'end radius r2')}
+                <label>ends<select value={v.vf_rev} onChange={set('vf_rev')}><option value="">as picked</option><option value="yes">swapped</option></select></label>
+              </div>
+              {field('vf_points', 'Intermediate radii "t,r; t,r" (t = 0…1 along the edge)', 'optional, e.g. 0.5,8')}
+            </>
+          )}
+
+          {kind === 'sheet_hem' && (
+            <>
+              <p className={selEdges.length ? 'small' : 'warn small'}>{selEdges.length ? `Edge of ${selEdges[0].feature ?? 'base'} selected (${(selEdges[0].length ?? 0).toFixed(1)} mm).` : 'Select a straight edge on the top or bottom of the base flange (Edge mode).'}</p>
+              <div className="grid3">
+                <label>hem<select value={v.hem_type} onChange={set('hem_type')}><option value="closed">closed</option><option value="open">open</option></select></label>
+                {v.hem_type === 'open' && field('hem_gap', 'inside gap')}
+                {field('hem_len', 'hem length (after the fold)')}
+                <label>direction<select value={v.fl_dir} onChange={set('fl_dir')}><option value="up">up</option><option value="down">down</option></select></label>
+                {field('fl_ts', 'trim at edge start')}{field('fl_te', 'trim at edge end')}
+              </div>
+              <p className="muted small">A 180° fold back over the sheet. A closed hem is modelled with a 0.02 mm gap so both layers stay one valid solid; the flat pattern adds BA = π·(R + K·t).</p>
             </>
           )}
 

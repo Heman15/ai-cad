@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect, useState } from 'react'
 import {
-  Box, CircleDot, CornerDownRight, FlipHorizontal2, Grid3x3, Layers, Monitor, Moon, Orbit, Package, PanelTop, PenLine,
-  Radius, RotateCw, Spline, Sun, Triangle, Waves, type LucideIcon,
+  Box, ChartSpline, CircleDot, Cone, CornerDownRight, FlipHorizontal2, FoldVertical, Grid3x3, Layers, Monitor, Moon, Orbit, Package, PanelTop, PenLine,
+  Radius, RotateCw, Spline, Sun, Triangle, TriangleRight, Waves, type LucideIcon,
 } from 'lucide-react'
 
 export const FEATURE_ICONS: Record<string, LucideIcon> = {
   sketch: PenLine, extrude: Box, revolve: RotateCw, sweep: Spline, loft: Layers, hole: CircleDot,
   fillet: Radius, chamfer: Triangle, shell: Package, thread: Waves,
   pattern_linear: Grid3x3, pattern_circular: Orbit, mirror: FlipHorizontal2,
-  sheet_base: PanelTop, sheet_flange: CornerDownRight,
+  sheet_base: PanelTop, sheet_flange: CornerDownRight, sheet_hem: FoldVertical,
+  draft: Cone, rib: TriangleRight, variable_fillet: ChartSpline,
 }
 
 /** Small isometric cube with one face (or none, for isometric) highlighted. */

@@ -58,8 +58,8 @@ The spec is the single source of truth: geometry is always regenerated from it, 
 
 ### Regeneration (`cadcore/builder.py`)
 Variables are evaluated in dependency order; cycles and unknown names fail with an explicit message. Features build in order:
-- **Tool features** add or remove a body: `extrude`, `revolve`, `hole`, `pattern_linear`, `pattern_circular`, `mirror`, `sketch`-based extrude and revolve. Their bodies are recorded so faces can be traced back to them.
-- **Modifiers** change the existing solid: `fillet`, `chamfer`, `shell`. The faces they create are recorded.
+- **Tool features** add or remove a body: `extrude`, `revolve`, `hole` (also ISO Hole Wizard sizes, `cadcore/holes.py`), `rib`, `pattern_linear`, `pattern_circular`, `mirror`, `sketch`-based extrude and revolve. Their bodies are recorded so faces can be traced back to them.
+- **Modifiers** change the existing solid: `fillet`, `variable_fillet`, `chamfer`, `shell`, `draft`. The faces they create are recorded.
 
 Each feature is validated: positive sizes, holes must not break out of their face, the result must be a single valid solid, and references must still resolve. Any failure raises `BuildError`; `Project` then discards the candidate spec and keeps the last valid model.
 
