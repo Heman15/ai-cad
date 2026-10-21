@@ -11,13 +11,13 @@ import AssemblyWorkspace from './Assembly'
 import AnnotationsPanel from './Annotations'
 import SettingsDialog from './Settings'
 import SketchEditor from './SketchEditor'
-import Viewport, { type DisplayStyle, type MeasureGraphic, type PickMode, type StdView, type ViewportHandle } from './Viewport'
+import Viewport, { type DisplayStyle, type MeasureGraphic, type PickMode, type ViewportHandle } from './Viewport'
 import MeasurePanel from './Measure'
-import { RibbonButton, RibbonGroup, ThemeButton, ViewIcon } from './ui'
+import { HudButton, RibbonButton, RibbonGroup, StatusBar, TitleBar, ViewHud } from './ui'
 import {
-  Box, ChevronDown, CircleDot, CornerDownRight, Cuboid, Download, Factory, FileImage, FilePlus, FileText, FlipHorizontal2, FolderOpen, Gauge,
-  Grid3x3, Layers, LayoutTemplate, Maximize, Minus, MousePointer2, Orbit, Package, PanelTop, PenLine, PenTool, Radius, Redo2, RotateCw, Ruler,
-  Save, SaveAll, Scale3d, Scan, Settings2, SlidersHorizontal, Sparkles, Spline, Square, SquareDashed, SquareMinus, Triangle, Undo2, Waves, Weight,
+  Box, CircleDot, CornerDownRight, Cuboid, Download, Factory, FileImage, FileText, FlipHorizontal2, Gauge,
+  Grid3x3, Layers, LayoutTemplate, Minus, MousePointer2, Orbit, Package, PanelTop, PenLine, PenTool, Radius, RotateCw, Ruler,
+  Scale3d, Scan, SlidersHorizontal, Sparkles, Spline, Square, SquareMinus, Triangle, Waves, Weight,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -51,7 +51,6 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
   const [showFlat, setShowFlat] = useState(false)
   const drawingInput = useRef<HTMLInputElement>(null)
   const [rtab, setRtab] = useState<RTab>('features')
-  const [viewsOpen, setViewsOpen] = useState(false)
   const [display, setDisplay] = useState<DisplayStyle>('shaded-edges')
   const [showDims, setShowDims] = useState(false)
   const [measureSel, setMeasureSel] = useState<SelRef[]>([])
@@ -234,31 +233,17 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
 
   return (
     <div className={`app part ${tab === 'drawing' || tab === 'analysis' ? 'wide-right' : ''}`}>
-      <header className="titlebar">
-        <span className="brand"><span className="logo"><Cuboid size={16} /></span>AI CAD</span>
-        {modeSwitch}
-        <div className="qa">
-          <button className="icon-btn" aria-label="New" title="New part" onClick={() => { apply(api.newProject()); setSelection([]) }}><FilePlus size={16} /></button>
-          <button className="icon-btn" aria-label="Open" title="Open (Ctrl+O)" onClick={open}><FolderOpen size={16} /></button>
-          <button className="icon-btn" aria-label="Save" title="Save (Ctrl+S)" onClick={() => save(false)} disabled={!model}><Save size={16} /></button>
-          <button className="icon-btn" aria-label="Save as" title="Save as (Ctrl+Shift+S)" onClick={() => save(true)} disabled={!model}><SaveAll size={16} /></button>
-          <span className="qa-sep" />
-          <button className="icon-btn" aria-label="Undo" title="Undo (Ctrl+Z)" onClick={undo} disabled={!model?.can_undo}><Undo2 size={16} /></button>
-          <button className="icon-btn" aria-label="Redo" title="Redo (Ctrl+Y)" onClick={redo} disabled={!model?.can_redo}><Redo2 size={16} /></button>
-          <input ref={fileRef} type="file" accept=".aicad,.json" hidden onChange={async (e) => {
-            const f = e.target.files?.[0]
-            e.target.value = ''
-            if (!f) return
-            try { await apply(api.uploadProject(JSON.parse(await f.text()))); setStatus({ ok: true, text: `opened ${f.name}` }) }
-            catch (err) { setStatus({ ok: false, text: `could not open ${f.name}: ${(err as Error).message}` }) }
-          }} />
-        </div>
-        <span className="doc-title">{model?.spec.name || 'Untitled'}{model?.path ? '' : ' *'}<span className="muted"> · Part</span></span>
-        <div className="qa qa-end">
-          <ThemeButton />
-          <button className="icon-btn" aria-label="AI settings" title="AI settings" onClick={() => setShowSettings(true)}><Settings2 size={16} /></button>
-        </div>
-      </header>
+      <TitleBar modeSwitch={modeSwitch} kind="Part" title={model?.spec.name || 'Untitled'} unsaved={!model?.path}
+        onNew={() => { apply(api.newProject()); setSelection([]) }} onOpen={open} onSave={() => save(false)} onSaveAs={() => save(true)}
+        onUndo={undo} onRedo={redo} canSave={!!model} canUndo={!!model?.can_undo} canRedo={!!model?.can_redo} onSettings={() => setShowSettings(true)}>
+        <input ref={fileRef} type="file" accept=".aicad,.json" hidden onChange={async (e) => {
+          const f = e.target.files?.[0]
+          e.target.value = ''
+          if (!f) return
+          try { await apply(api.uploadProject(JSON.parse(await f.text()))); setStatus({ ok: true, text: `opened ${f.name}` }) }
+          catch (err) { setStatus({ ok: false, text: `could not open ${f.name}: ${(err as Error).message}` }) }
+        }} />
+      </TitleBar>
 
       <nav className="ribbon">
         <div className="rtabs" role="tablist">
@@ -355,35 +340,15 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
           <Viewport ref={viewRef} model={model} mode={mode} selection={measuring ? measureSel : selection} selectedFeature={selectedFeature} onPick={onPick}
             overlay={overlay} markers={markers} display={display} showDims={showDims} measure={measuring ? measureGfx : null} />
         </ErrorBoundary>
-        <div className="hud" role="toolbar" aria-label="View">
-          <button className="icon-btn" aria-label="Fit" title="Zoom to fit (F)" onClick={() => viewRef.current?.fit()}><Maximize size={16} /></button>
-          {(['iso', 'front', 'top', 'right'] as StdView[]).map((v) => (
-            <button key={v} className="icon-btn" aria-label={VIEW_NAMES[v]} title={`${VIEW_NAMES[v]} view`} onClick={() => viewRef.current?.view(v)}><ViewIcon face={v} /></button>
-          ))}
-          <div className="menu-anchor">
-            <button className="icon-btn" aria-label="More views" title="Back, bottom, left" onClick={() => setViewsOpen(!viewsOpen)}><ChevronDown size={14} /></button>
-            {viewsOpen && (
-              <div className="menu hud-menu" onMouseLeave={() => setViewsOpen(false)}>
-                {(['back', 'bottom', 'left'] as StdView[]).map((v) => (
-                  <button key={v} onClick={() => { viewRef.current?.view(v); setViewsOpen(false) }}><ViewIcon face={v} /> {VIEW_NAMES[v]}</button>
-                ))}
-              </div>
-            )}
-          </div>
-          <span className="hud-sep" />
-          {DISPLAY.map(([d, label, Icon]) => (
-            <button key={d} className={`icon-btn ${display === d ? 'on' : ''}`} aria-label={label} title={label} aria-pressed={display === d} onClick={() => setDisplay(d)}><Icon size={16} /></button>
-          ))}
+        <ViewHud viewRef={viewRef} display={display} setDisplay={setDisplay}>
           <span className="hud-sep" />
           {PICKS.map(([m, label, Icon]) => (
-            <button key={m} className={`icon-btn ${mode === m ? 'on' : ''}`} aria-label={label} title={`Select ${label.toLowerCase()}s`} aria-pressed={mode === m} onClick={() => setPick(m)}><Icon size={16} /></button>
+            <HudButton key={m} icon={Icon} label={label} title={`Select ${label.toLowerCase()}s`} on={mode === m} onClick={() => setPick(m)} />
           ))}
           <span className="hud-sep" />
-          <button className={`icon-btn ${measuring ? 'on' : ''}`} aria-label="Measure tool" title="Measure (M)" aria-pressed={measuring} disabled={!hasSolid}
-            onClick={() => setPick(measuring ? 'feature' : 'measure')}><Ruler size={16} /></button>
-          <button className={`icon-btn ${showDims ? 'on' : ''}`} aria-label="Show dimensions" title="Overall dimensions" aria-pressed={showDims} disabled={!hasSolid}
-            onClick={() => setShowDims(!showDims)}><Scale3d size={16} /></button>
-        </div>
+          <HudButton icon={Ruler} label="Measure tool" title="Measure (M)" on={measuring} disabled={!hasSolid} onClick={() => setPick(measuring ? 'feature' : 'measure')} />
+          <HudButton icon={Scale3d} label="Show dimensions" title="Overall dimensions" on={showDims} disabled={!hasSolid} onClick={() => setShowDims(!showDims)} />
+        </ViewHud>
         {measuring && model && (
           <MeasurePanel selection={measureSel} model={model} onGraphic={setMeasureGfx}
             onClear={() => setMeasureSel([])} onClose={() => setPick('feature')} />
@@ -426,21 +391,14 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
         )}
       </aside>
 
-      <footer className="statusbar">
-        {status ? <span className={`status ${status.ok ? 'ok' : 'err'}`} title={status.text}>{status.text}</span> : <span className="status muted">Ready</span>}
-        <span className="sb-mid muted">
-          {measuring ? 'Measure: click points, edges or faces · Esc clears'
-            : selection.length ? `${selection.length} ${selection[0].kind}${selection.length > 1 ? 's' : ''} selected · Shift-click to add`
-            : selectedFeature ? <>Feature <b>{selectedFeature}</b></> : `Click selects ${mode}s · drag rotates · right-drag pans · wheel zooms`}
-        </span>
-        {model?.bbox_mm && (
-          <span className="readout">
-            {model.bbox_mm.map((v) => v.toFixed(1)).join(' × ')} mm · {model.volume_mm3!.toFixed(1)} mm³
-            {model.mass_kg !== null && ` · ${(model.mass_kg * 1000).toFixed(2)} g`}
-          </span>
-        )}
-        <span className="units" title="Units: millimetre, gram, second">MMGS</span>
-      </footer>
+      <StatusBar status={status}
+        hint={measuring ? 'Measure: click points, edges or faces · Esc clears'
+          : selection.length ? `${selection.length} ${selection[0].kind}${selection.length > 1 ? 's' : ''} selected · Shift-click to add`
+          : selectedFeature ? <>Feature <b>{selectedFeature}</b></> : `Click selects ${mode}s · drag rotates · right-drag pans · wheel zooms`}
+        readout={model?.bbox_mm && <>
+          {model.bbox_mm.map((v) => v.toFixed(1)).join(' × ')} mm · {model.volume_mm3!.toFixed(1)} mm³
+          {model.mass_kg !== null && ` · ${(model.mass_kg * 1000).toFixed(2)} g`}
+        </>} />
 
       {showFlat && model && <FlatPatternDialog model={model} onClose={() => setShowFlat(false)} setStatus={setStatus} />}
       {showDrawing && model && <DrawingDialog model={model} onClose={() => setShowDrawing(false)} setStatus={setStatus} />}
@@ -458,8 +416,6 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
 
 type RTab = 'features' | 'sketch' | 'evaluate' | 'sheet' | 'io'
 const RTABS: [RTab, string][] = [['features', 'Features'], ['sketch', 'Sketch'], ['evaluate', 'Evaluate'], ['sheet', 'Sheet Metal'], ['io', 'Import / Export']]
-const VIEW_NAMES: Record<StdView, string> = { iso: 'Isometric', front: 'Front', back: 'Back', top: 'Top', bottom: 'Bottom', right: 'Right', left: 'Left' }
-const DISPLAY: [DisplayStyle, string, LucideIcon][] = [['shaded-edges', 'Shaded with edges', Box], ['shaded', 'Shaded', Cuboid], ['wireframe', 'Wireframe', SquareDashed]]
 const PICKS: [PickMode, string, LucideIcon][] = [['feature', 'Feature', MousePointer2], ['face', 'Face', Square], ['edge', 'Edge', Minus]]
 type RightTab = 'assistant' | 'properties' | 'drawing' | 'analysis'
 const RIGHT_TABS: [RightTab, string, LucideIcon][] = [['assistant', 'Assistant', Sparkles], ['properties', 'Properties', SlidersHorizontal], ['drawing', 'Drawing', FileImage], ['analysis', 'Analysis', Gauge]]

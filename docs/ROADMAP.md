@@ -132,3 +132,17 @@ Windows and macOS installers are not built. The code is portable, but the script
     - an Assistant tab in the Assembly workspace, with live sync.
   - **Verified end to end:** one chat message ("bring in the AiNex, raise its right arm, turn its head") made Claude Code find the repository, download 8 MB, import, pose and report the licence.
   - **Tests:** 87 unit/API tests and 6 UI suites pass.
+- **2026-10-21:**
+  - **Assembly workspace, SolidWorks-style:** the same title bar, ribbon (Assembly, Evaluate, Import / Export), heads-up view toolbar, orientation triad and status bar as the Part workspace. These pieces are now shared components (`TitleBar`, `ViewHud`, `StatusBar` in `ui.tsx`). The FeatureManager tree shows components with fixed `(f)` / floating `(-)` prefixes, robot link names and hidden state, a Mates folder (select, edit, suppress, delete) and a Joints folder with the sliders. A PropertyManager tab hosts each command.
+  - **Mates:** angle, perpendicular and lock mates; alignment flip; editing values; suppress and unsuppress. Prealign turns faces off the solver's saddle points, about the component's other mate axes where possible. First placement now moves a component only along constrained directions, so free directions keep where it was put.
+  - **Components:**
+    - Move and Rotate Component: drag in the 3D view, nudge buttons, or numeric input. Free components only; mates re-solve.
+    - Linear and circular component patterns.
+    - Show/hide, isolate and transparency.
+  - **Exploded views:** steps (direction and distance) and auto-explode radially from the centre, saved in the `.aicadasm` file. They are drawn as display offsets, with an animated explode/collapse toggle.
+  - **Evaluate:**
+    - measure between faces, edges and vertices of components in world coordinates (`/api/asm/measure`);
+    - mass properties: mass from materials, or URDF link masses, plus centre of mass (`/api/asm/mass`);
+    - bill of materials with CSV export (`/api/asm/bom.csv`).
+  - **MCP:** the `assembly` tool documents the new mate types and commands, plus `mass`, `bom_csv` and `measure`.
+  - **Tests:** 95 unit/API tests pass, including 8 new solver tests that check solved poses numerically. The `ui_assembly`, `ui_urdf` and `ui_smoke` suites pass.

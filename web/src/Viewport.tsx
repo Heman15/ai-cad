@@ -3,7 +3,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
-import { refOf, type Model, type Overlay, type SelRef } from './api'
+import { refOf, type Model, type Overlay, type SelRef, type VertexEntity } from './api'
 
 /** What a click selects. 'measure' picks the nearest vertex, then edge, then face. */
 export type PickMode = 'feature' | 'face' | 'edge' | 'measure'
@@ -36,6 +36,15 @@ interface Props {
   measure?: MeasureGraphic | null
   /** Assembly: extra motion per component (column-major 4x4), e.g. while dragging a robot joint. */
   poses?: Record<string, number[]>
+  /** Assembly: per-component display (hidden, see-through). */
+  appearance?: Record<string, { hidden?: boolean; opacity?: number }>
+  /** Assembly: components shown as selected (whole component). */
+  highlight?: string[]
+  /** Assembly: components that can be dragged with the left button; onDrag gets the world translation on release. */
+  draggable?: string[] | null
+  onDrag?: (component: string, delta: number[]) => void
+  /** Shown over an empty view. */
+  emptyHint?: React.ReactNode
 }
 
 const COLORS = {
@@ -52,7 +61,7 @@ interface Ctx {
   part: THREE.Group
   faces: THREE.Mesh[]
   edges: THREE.Line[]
-  vertices: THREE.Points | null
+  vertices: { points: THREE.Points; ids: number[]; component?: string }[]
   groups: Map<string, THREE.Group>
   fitted: boolean
   hover: { kind: 'face' | 'edge' | 'vertex'; index: number } | null
@@ -64,14 +73,15 @@ const VIEW_DIRS: Record<StdView, [number, number, number]> = {
 }
 
 const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
-  { model, mode, selection, selectedFeature, onPick, overlay, markers, display = 'shaded-edges', showDims = false, measure, poses }, ref) {
+  { model, mode, selection, selectedFeature, onPick, overlay, markers, display = 'shaded-edges', showDims = false, measure, poses,
+    appearance, highlight, draggable, onDrag, emptyHint }, ref) {
   const hostRef = useRef<HTMLDivElement>(null)
   const ctxRef = useRef<Ctx | null>(null)
   const [glError, setGlError] = useState<string | null>(null)
-  const pickRef = useRef({ mode, onPick, model })
-  pickRef.current = { mode, onPick, model }
-  const paintRef = useRef({ selection, selectedFeature, mode })
-  paintRef.current = { selection, selectedFeature, mode }
+  const pickRef = useRef({ mode, onPick, model, draggable, onDrag })
+  pickRef.current = { mode, onPick, model, draggable, onDrag }
+  const paintRef = useRef({ selection, selectedFeature, mode, highlight })
+  paintRef.current = { selection, selectedFeature, mode, highlight }
 
   useImperativeHandle(ref, () => ({
     fit: () => ctxRef.current && fit(ctxRef.current),
@@ -139,7 +149,7 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
     }
 
     const ctx: Ctx = {
-      renderer, labels, scene, camera, controls, part, faces: [], edges: [], vertices: null, groups: new Map(), fitted: false, hover: null,
+      renderer, labels, scene, camera, controls, part, faces: [], edges: [], vertices: [], groups: new Map(), fitted: false, hover: null,
       paint: () => paint(ctx, paintRef.current),
     }
     ctxRef.current = ctx
@@ -151,12 +161,14 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
       return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height }
     }
 
+    let draw = () => {}
     const resize = () => {
       const { clientWidth: w, clientHeight: h } = host
       renderer.setSize(w, h)
       labels.setSize(w, h)
       camera.aspect = w / Math.max(h, 1)
       camera.updateProjectionMatrix()
+      draw() // setSize clears the canvas: redraw now rather than leave it blank until the next frame
     }
     const ro = new ResizeObserver(resize)
     ro.observe(host)
@@ -172,12 +184,17 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
       ray.setFromCamera(ndc, camera)
       const dist = camera.position.distanceTo(controls.target)
       ray.params.Line = { threshold: dist / 250 }
-      const face = ray.intersectObjects(ctx.faces)[0]
+      const shown = (o: THREE.Object3D) => o.parent?.visible !== false // hidden assembly components can't be picked
+      const faces = ctx.faces.filter(shown), edges = ctx.edges.filter(shown)
+      const face = ray.intersectObjects(faces)[0]
       if (mode === 'measure') {
         // Nearest visible vertex within 9 px, then an edge in front of the face, then the face.
         let best: { i: number; d: number } | null = null
         for (const v of ents.vertices ?? []) {
+          const g = v.component ? ctx.groups.get(v.component) : undefined
+          if (g && !g.visible) continue
           const p = new THREE.Vector3(...v.point)
+          if (g) p.applyMatrix4(g.matrix)
           const s = p.clone().project(camera)
           const d = Math.hypot(((s.x + 1) / 2) * rect.width + rect.left - clientX, ((1 - s.y) / 2) * rect.height + rect.top - clientY)
           if (d > 9 || (best && d >= best.d)) continue
@@ -185,21 +202,60 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
           best = { i: v.index, d }
         }
         if (best) return { kind: 'vertex' as const, index: best.i }
-        const edge = ray.intersectObjects(ctx.edges)[0]
+        const edge = ray.intersectObjects(edges)[0]
         if (edge && (!face || edge.distance <= face.distance + dist / 100)) return { kind: 'edge' as const, index: edge.object.userData.index as number }
         return face ? { kind: 'face' as const, index: face.object.userData.index as number } : null
       }
       if (mode === 'edge') {
-        const edge = ray.intersectObjects(ctx.edges)[0]
+        const edge = ray.intersectObjects(edges)[0]
         return edge ? { kind: 'edge' as const, index: edge.object.userData.index as number } : null
       }
       return face ? { kind: 'face' as const, index: face.object.userData.index as number } : null
     }
 
+    // Assembly: drag a movable component in the plane facing the camera (preview only; onDrag commits).
+    let drag: { id: string; group: THREE.Group; base: THREE.Matrix4; plane: THREE.Plane; from: THREE.Vector3; delta: THREE.Vector3 } | null = null
+    const rayAt = (e: PointerEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect()
+      const ray = new THREE.Raycaster()
+      ray.setFromCamera(new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1), camera)
+      return ray
+    }
+
     // Left click (not drag) picks; shift adds to the selection.
     let down: { x: number; y: number } | null = null
-    const onDown = (e: PointerEvent) => (down = { x: e.clientX, y: e.clientY })
+    const onDown = (e: PointerEvent) => {
+      down = { x: e.clientX, y: e.clientY }
+      const { draggable, mode } = pickRef.current
+      if (e.button !== 0 || !draggable?.length || mode === 'measure') return
+      const hit = rayAt(e).intersectObjects(ctx.faces.filter((f) => f.parent?.visible !== false))[0]
+      const id = hit?.object.userData.component as string | undefined
+      const group = id ? ctx.groups.get(id) : undefined
+      if (!hit || !id || !group || !draggable.includes(id)) return
+      controls.enabled = false // this listener runs in the capture phase, before OrbitControls' own
+      const normal = camera.getWorldDirection(new THREE.Vector3())
+      drag = { id, group, base: group.matrix.clone(), plane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, hit.point), from: hit.point.clone(), delta: new THREE.Vector3() }
+      renderer.domElement.setPointerCapture(e.pointerId)
+    }
+    const onDragMove = (e: PointerEvent) => {
+      if (!drag) return
+      const p = rayAt(e).ray.intersectPlane(drag.plane, new THREE.Vector3())
+      if (!p) return
+      drag.delta.copy(p).sub(drag.from)
+      drag.group.matrix.copy(new THREE.Matrix4().makeTranslation(drag.delta.x, drag.delta.y, drag.delta.z).multiply(drag.base))
+      drag.group.matrixWorldNeedsUpdate = true
+    }
     const onUp = (e: PointerEvent) => {
+      if (drag) {
+        const d = drag
+        drag = null
+        controls.enabled = true
+        renderer.domElement.releasePointerCapture(e.pointerId)
+        if (d.delta.length() > 1e-6) {
+          pickRef.current.onDrag?.(d.id, d.delta.toArray())
+          return
+        }
+      }
       if (e.button !== 0 || !down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return
       const ents = pickRef.current.model?.entities
       if (!ents) return
@@ -211,18 +267,21 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
     // Pre-selection highlight under the cursor.
     let pending: PointerEvent | null = null
     const onMove = (e: PointerEvent) => {
+      if (drag) { onDragMove(e); return }
       if (e.buttons) { if (ctx.hover) { ctx.hover = null; ctx.paint() } return }
       if (!pending) requestAnimationFrame(() => {
         const ev = pending!
         pending = null
         const h = hitAt(ev.clientX, ev.clientY)
         if (h?.kind !== ctx.hover?.kind || h?.index !== ctx.hover?.index) { ctx.hover = h; ctx.paint() }
-        renderer.domElement.style.cursor = h ? 'pointer' : ''
+        const { draggable } = pickRef.current
+        const movable = h?.kind === 'face' && draggable?.includes(ctx.faces.find((f) => f.userData.index === h.index)?.userData.component)
+        renderer.domElement.style.cursor = movable ? 'move' : h ? 'pointer' : ''
       })
       pending = e
     }
     const onLeave = () => { if (ctx.hover) { ctx.hover = null; ctx.paint() } }
-    renderer.domElement.addEventListener('pointerdown', onDown)
+    renderer.domElement.addEventListener('pointerdown', onDown, { capture: true })
     renderer.domElement.addEventListener('pointerup', onUp)
     renderer.domElement.addEventListener('pointermove', onMove)
     renderer.domElement.addEventListener('pointerleave', onLeave)
@@ -230,6 +289,9 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
     let frame = 0
     const loop = () => {
       frame = requestAnimationFrame(loop)
+      draw()
+    }
+    draw = () => {
       controls.update()
       const { clientWidth: w, clientHeight: h } = host
       renderer.setViewport(0, 0, w, h)
@@ -278,7 +340,7 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
     }
     ctx.faces = []
     ctx.edges = []
-    ctx.vertices = null
+    ctx.vertices = []
     ctx.hover = null
     const ents = model?.entities
     if (!ents) {
@@ -295,7 +357,7 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
         color: base, metalness: 0.2, roughness: 0.5, side: THREE.DoubleSide, flatShading: f.type === 'MESH',
         polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
       }))
-      m.userData = { index: f.index, feature: f.feature, base }
+      m.userData = { index: f.index, feature: f.feature, component: f.component, base }
       holder(f.component).add(m)
       ctx.faces.push(m)
     }
@@ -307,12 +369,16 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
       holder(e.component).add(l)
       ctx.edges.push(l)
     }
-    if (ents.vertices?.length) {
+    // vertices: one point cloud per component, so they move with it
+    const byComp = new Map<string | undefined, VertexEntity[]>()
+    for (const v of ents.vertices ?? []) byComp.set(v.component, [...(byComp.get(v.component) ?? []), v])
+    for (const [component, vs] of byComp) {
       const g = new THREE.BufferGeometry()
-      g.setAttribute('position', new THREE.Float32BufferAttribute(ents.vertices.flatMap((v) => v.point), 3))
-      g.setAttribute('color', new THREE.Float32BufferAttribute(ents.vertices.flatMap(() => [0, 0, 0]), 3))
-      ctx.vertices = new THREE.Points(g, new THREE.PointsMaterial({ size: 7, sizeAttenuation: false, vertexColors: true }))
-      ctx.part.add(ctx.vertices)
+      g.setAttribute('position', new THREE.Float32BufferAttribute(vs.flatMap((v) => v.point), 3))
+      g.setAttribute('color', new THREE.Float32BufferAttribute(vs.flatMap(() => [0, 0, 0]), 3))
+      const points = new THREE.Points(g, new THREE.PointsMaterial({ size: 7, sizeAttenuation: false, vertexColors: true }))
+      holder(component).add(points)
+      ctx.vertices.push({ points, ids: vs.map((v) => v.index), component })
     }
     // floor grid just under the part (robots often have their origin at the hips)
     const grid = ctx.scene.getObjectByName('grid')
@@ -335,6 +401,24 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
       g.matrixWorldNeedsUpdate = true
     }
   }, [poses, model])
+
+  // Assembly: hidden and see-through components.
+  useEffect(() => {
+    const ctx = ctxRef.current
+    if (!ctx) return
+    for (const [id, g] of ctx.groups) {
+      const a = appearance?.[id]
+      g.visible = !a?.hidden
+      const opacity = a?.opacity ?? 1
+      g.traverse((o) => {
+        if (!(o instanceof THREE.Mesh || o instanceof THREE.Line)) return
+        const mat = o.material as THREE.Material
+        mat.transparent = opacity < 1
+        mat.opacity = o instanceof THREE.Line ? Math.min(1, opacity * 1.5) : opacity
+        mat.depthWrite = opacity >= 1
+      })
+    }
+  }, [appearance, model])
 
   // Display style.
   useEffect(() => {
@@ -421,7 +505,7 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
   }, [model, showDims, measure])
 
   // Recolour for selection/hover without rebuilding geometry.
-  useEffect(() => { ctxRef.current?.paint() }, [model, selection, selectedFeature, mode, display])
+  useEffect(() => { ctxRef.current?.paint() }, [model, selection, selectedFeature, mode, display, highlight])
 
   return (
     <div className="viewport" ref={hostRef}>
@@ -434,7 +518,7 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
         </div>
       )}
       {!glError && !model?.entities && (
-        <div className="overlay hint">No part yet. Start a <b>Sketch</b>, pick a template with <b>Create part…</b>, or describe a part to the assistant.</div>
+        <div className="overlay hint">{emptyHint ?? <>No part yet. Start a <b>Sketch</b>, pick a template with <b>Create part…</b>, or describe a part to the assistant.</>}</div>
       )}
     </div>
   )
@@ -442,13 +526,15 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
 
 export default Viewport
 
-function paint(ctx: Ctx, { selection, selectedFeature, mode }: { selection: SelRef[]; selectedFeature: string | null; mode: PickMode }) {
+function paint(ctx: Ctx, { selection, selectedFeature, mode, highlight }: { selection: SelRef[]; selectedFeature: string | null; mode: PickMode; highlight?: string[] }) {
+  const lit = new Set(highlight ?? [])
   const sel = (k: string) => new Set(selection.filter((s) => s.kind === k).map((s) => s.index))
   const selFaces = sel('face'), selEdges = sel('edge'), selVerts = sel('vertex')
   const hv = ctx.hover
   for (const m of ctx.faces) {
     const i = m.userData.index
-    const inFeature = (mode === 'feature' || selection.length === 0) && selectedFeature !== null && m.userData.feature === selectedFeature
+    const inFeature = ((mode === 'feature' || selection.length === 0) && selectedFeature !== null && m.userData.feature === selectedFeature)
+      || lit.has(m.userData.component)
     const hoveredFace = hv?.kind === 'face' ? ctx.faces.find((f) => f.userData.index === hv.index) : undefined
     const hovered = hoveredFace && (hoveredFace === m || (mode === 'feature' && m.userData.feature && hoveredFace.userData.feature === m.userData.feature))
     ;(m.material as THREE.MeshStandardMaterial).color.setHex(
@@ -459,15 +545,14 @@ function paint(ctx: Ctx, { selection, selectedFeature, mode }: { selection: SelR
     const mat = l.material as THREE.LineBasicMaterial
     mat.color.setHex(selEdges.has(i) ? COLORS.edgeSel : hv?.kind === 'edge' && hv.index === i ? COLORS.edgeHover : COLORS.edge)
   }
-  if (ctx.vertices) {
-    const show = mode === 'measure'
-    ctx.vertices.visible = show || selVerts.size > 0
-    const c = ctx.vertices.geometry.getAttribute('color') as THREE.BufferAttribute
-    const base = new THREE.Color(COLORS.vertex), on = new THREE.Color(COLORS.vertexSel), hov = new THREE.Color(COLORS.edgeHover)
-    for (let i = 0; i < c.count; i++) {
+  const base = new THREE.Color(COLORS.vertex), on = new THREE.Color(COLORS.vertexSel), hov = new THREE.Color(COLORS.edgeHover)
+  for (const { points, ids } of ctx.vertices) {
+    points.visible = mode === 'measure' || ids.some((i) => selVerts.has(i))
+    const c = points.geometry.getAttribute('color') as THREE.BufferAttribute
+    ids.forEach((i, k) => {
       const col = selVerts.has(i) ? on : hv?.kind === 'vertex' && hv.index === i ? hov : base
-      c.setXYZ(i, col.r, col.g, col.b)
-    }
+      c.setXYZ(k, col.r, col.g, col.b)
+    })
     c.needsUpdate = true
   }
 }

@@ -39,8 +39,10 @@ function graphic(r: Result, sel: SelRef[]): MeasureGraphic | null {
   return label ? { label, anchor: at } : null
 }
 
-export default function MeasurePanel({ selection, model, onClear, onClose, onGraphic }: {
+export default function MeasurePanel({ selection, model, onClear, onClose, onGraphic, measure = api.measure }: {
   selection: SelRef[]; model: Model; onClear: () => void; onClose: () => void; onGraphic: (g: MeasureGraphic | null) => void
+  /** Backend call; the assembly measures components in world coordinates. */
+  measure?: (refs: SelRef[]) => Promise<Result>
 }) {
   const [result, setResult] = useState<Result | null>(null)
   useEffect(() => {
@@ -48,11 +50,11 @@ export default function MeasurePanel({ selection, model, onClear, onClose, onGra
     onGraphic(null)
     if (!selection.length || !model.entities) return
     let live = true
-    api.measure(selection)
+    measure(selection)
       .then((r) => { if (live) { setResult(r); onGraphic(graphic(r, selection)) } })
       .catch((e) => live && setResult({ ok: false, message: (e as Error).message }))
     return () => { live = false }
-  }, [selection, model, onGraphic])
+  }, [selection, model, onGraphic, measure])
 
   return (
     <div className="measure-panel" role="dialog" aria-label="Measure">
@@ -67,7 +69,7 @@ export default function MeasurePanel({ selection, model, onClear, onClose, onGra
         <ol className="mp-picks">
           {selection.map((s, i) => (
             <li key={i}><span className={`pick-dot k${i}`} />{s.kind === 'vertex' ? 'Point' : s.kind === 'edge' ? 'Edge' : 'Face'}
-              <span className="muted"> · {s.kind === 'vertex' ? s.point.map((v) => fmt(v, 2)).join(', ') : s.type.toLowerCase()}</span></li>
+              <span className="muted"> · {s.kind === 'vertex' ? s.point.map((v) => fmt(v, 2)).join(', ') : s.type.toLowerCase()}{s.component ? ` of ${s.component}` : ''}</span></li>
           ))}
         </ol>
       )}

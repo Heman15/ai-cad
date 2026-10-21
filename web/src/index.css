@@ -418,3 +418,34 @@ table.dims .value-field input { width: 64px; }
 .robot .joint { padding: 4px 0; }
 .robot .joint input[type=range] { width: 100%; accent-color: var(--accent); padding: 0; border: none; background: none; }
 .robot .jval { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* ---------- assembly ---------- */
+.fm-status { padding: 0 6px 6px; }
+.folder-head { display: flex; align-items: center; gap: 4px; padding-right: 4px; }
+.folder-head .tree-row { font-weight: 600; font-size: 12px; flex: 1; }
+.folder-body { padding-left: 10px; }
+.folder .robot { border-bottom: none; padding-top: 0; }
+.fix-flag { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
+.tree .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tree.comps .type { max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree.mates li { grid-template-columns: 18px auto minmax(0, 1fr) auto; }
+.tree.mates .type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree li.hidden-comp .name, .tree li.hidden-comp .icon { opacity: 0.45; }
+.tree li.conflict .name { color: var(--err); }
+.pm-head { display: flex; align-items: center; gap: 8px; padding: 8px 0 7px; border-bottom: 2px solid var(--accent); }
+.pm-head svg { color: var(--accent); }
+.pm-head .icon-btn svg { color: var(--muted); }
+.mate-types { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 8px; }
+.mate-types button { display: flex; align-items: center; gap: 6px; }
+.mate-types button svg { color: var(--accent); }
+.nudge { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.nudge .row b { width: 16px; }
+.nudge button { flex: 1; }
+section.dim { opacity: 0.7; }
+input.short { width: 64px; }
+.pm-actions { margin-top: 8px; }
+.pm-actions button { display: inline-flex; align-items: center; gap: 4px; }
+label.grow { flex: 1; display: flex; flex-direction: column; font-size: 11.5px; color: var(--muted); gap: 3px; }
+.grid3 label.check { flex-direction: row; align-items: center; }
+.steps-list li { align-items: center; }
+.app.asm .stats dd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

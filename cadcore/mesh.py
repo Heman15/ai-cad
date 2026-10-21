@@ -179,23 +179,35 @@ def _entity(solid, r: dict[str, Any]):
     return {"face": solid.Faces, "edge": solid.Edges, "vertex": solid.Vertices}[r["kind"]]()[r["index"]]
 
 
+class ShapeResult:
+    """A bare shape standing in for a build result (no feature history), e.g. an assembly component placed in the world."""
+
+    def __init__(self, shape: cq.Shape):
+        self.shape = cq.Workplane("XY").add(shape)
+        self.tools, self.created, self.holes = [], [], []
+
+
 def measure(result: BuildResult, refs: list[dict[str, Any]]) -> dict[str, Any]:
     """Measurements for one or two resolved selections (faces, edges or vertices).
 
     For two entities, "points" holds the closest pair, so the UI can draw the dimension line.
     """
+    return measure_pairs([(result, r) for r in refs])
+
+
+def measure_pairs(pairs: list[tuple[Any, dict[str, Any]]]) -> dict[str, Any]:
+    """Like measure, but each selection is resolved in its own result (assembly components)."""
     import math
 
     from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 
-    resolved = [resolve(result, r) for r in refs]
+    resolved = [resolve(res, r) for res, r in pairs]
     bad = [r for r in resolved if r["status"] not in ("ok", "changed")]
     if bad:
         return {"ok": False, "message": bad[0]["reason"]}
     if len(resolved) not in (1, 2):
         return {"ok": False, "message": "select one or two entities to measure"}
-    solid = result.shape.val()
-    ents = [_entity(solid, r) for r in resolved]
+    ents = [_entity(res.shape.val(), r) for (res, _), r in zip(pairs, resolved)]
     out: dict[str, Any] = {"ok": True, "entities": resolved}
     if len(ents) == 1:
         r = resolved[0]

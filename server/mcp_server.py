@@ -243,10 +243,19 @@ def run_stress_analysis(supports: list[dict[str, Any]], loads: list[dict[str, An
 
 @mcp.tool()
 def assembly(command: str = "get", args: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Assembly workspace. command 'get' returns components, mates, solver status and BOM. Others:
+    """Assembly workspace. command 'get' returns components, mates, solver status, explode steps and BOM. Others:
     add_component(file, position, rotation, fixed), remove_component(id), set_transform(id, position, rotation),
-    set_fixed(id, fixed), add_mate(type coincident|distance|parallel|concentric, a {component, face {point, normal}},
-    b {...}, value, aligned), remove_mate(id), new, save(path), open(path), interference. Faces use component-local coordinates.
+    move_component(id, translate [dx,dy,dz], axis, angle deg, pivot?) for free components (mates re-solve),
+    set_fixed(id, fixed), set_visibility(ids id|[ids]|'*', hidden?, transparent?),
+    add_mate(type, a {component, face {point, normal}}, b {...}, value, aligned) with type
+      coincident|distance (value mm)|parallel|perpendicular|angle (value deg between normals, 0-180)|concentric|lock
+      (lock needs only {component}; it keeps the current relative pose),
+    edit_mate(id, value?, aligned?, suppressed?), flip_mate(id), remove_mate(id),
+    pattern_component(id, type linear|circular, count, direction, spacing | axis, point, angle),
+    add_explode_step(components, direction, distance), edit_explode_step(id, ...), remove_explode_step(id),
+    auto_explode(scale), clear_explode (exploded views are display offsets saved in the file),
+    new, save(path), open(path), interference, mass (mass, volume, centre of mass), bom_csv,
+    measure(refs [{kind face|edge|vertex, component, point (world)}]). Mate faces use component-local coordinates.
     Robots: import_urdf(path, out_dir?, geometry visual|collision) converts a URDF or xacro into parts plus an
     assembly and opens it; joints(values {joint: degrees or mm}) moves joints; set_joint(name, value) does it as an undo step."""
     if command == "get":
@@ -255,6 +264,12 @@ def assembly(command: str = "get", args: dict[str, Any] | None = None) -> dict[s
         m = _req("POST", f"/api/asm/{command}")
         if command == "interference":
             return m
+    elif command == "mass":
+        return _req("GET", "/api/asm/mass")
+    elif command == "bom_csv":
+        return {"csv": _req("GET", "/api/asm/bom.csv").decode()}
+    elif command == "measure":
+        return _req("POST", "/api/asm/measure", {"refs": (args or {}).get("refs", [])})
     elif command in ("save", "open"):
         m = _req("POST", f"/api/asm/{command}", {"path": (args or {}).get("path")})
     elif command == "import_urdf":
