@@ -149,7 +149,7 @@ class _Cache:
             m = p.spec.material
             info = {"shape": p.result.shape.val(), "name": p.spec.name, "material": m.name if m else None,
                     "mass_kg": p.result.volume_mm3 * 1e-9 * m.density if m else None, "result": p.result}
-        info["volume_mm3"] = abs(info["shape"].Volume()) if info["shape"].ShapeType() in ("Solid", "Compound") else 0.0
+        info["volume_mm3"] = sum(abs(x.Volume()) for x in info["shape"].Solids())  # surfaces have no volume
         self.items[key] = (mtime, info)
         return info
 

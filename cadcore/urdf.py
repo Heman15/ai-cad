@@ -94,10 +94,29 @@ def read_xml(path: Path) -> ET.Element:
             import xacro
         except ImportError as e:  # pragma: no cover
             raise AssemblyError("this is a xacro file and the xacro package isn't installed (pip install xacro)") from e
+        import xacro.substitution_args as sa
+
+        _check_xacro_expressions(path)
+
+        # $(find pkg) normally needs a ROS install; answer it from the folders around the file instead.
+        ros_find = sa._eval_find
+
+        def find(pkg: str) -> str:
+            d = find_package(pkg, path)
+            if d is not None:
+                return str(d)
+            try:
+                return ros_find(pkg)
+            except Exception as e:
+                raise AssemblyError(f"package {pkg!r} not found next to the file or in ROS_PACKAGE_PATH") from e
+
+        sa._eval_find, sa._eval_dict["find"] = find, find
         try:
             text = xacro.process_file(str(path)).toxml()
         except Exception as e:
             raise AssemblyError(f"xacro could not expand {path.name}: {e}") from e
+        finally:
+            sa._eval_find, sa._eval_dict["find"] = ros_find, ros_find
     try:
         root = ET.fromstring(text)
     except ET.ParseError as e:
@@ -105,6 +124,24 @@ def read_xml(path: Path) -> ET.Element:
     if root.tag != "robot":
         raise AssemblyError(f"{path.name} is not a URDF (root element is <{root.tag}>, expected <robot>)")
     return root
+
+
+# xacro evaluates ${...} and $(eval ...) as restricted Python; it already rejects names starting with "__".
+# Files may come from the internet, so expressions using introspection or I/O helpers are refused too.
+_RISKY = re.compile(r"\b(vars|type|getattr|setattr|delattr|globals|locals|eval|exec|compile|open|input|breakpoint|dir)\s*\(|\bpython\s*\.|\bimport\b|__")
+
+
+def _check_xacro_expressions(path: Path) -> None:
+    root = path.parent
+    for p in [path.parent, *path.parents][:4]:
+        if (p / "package.xml").exists():
+            root = p
+            break
+    for f in [path, *[x for x in root.rglob("*.xacro") if x != path]][:200]:
+        text = f.read_text(errors="ignore")
+        for expr in re.findall(r"\$\{([^}]*)\}", text) + re.findall(r"\$\(eval\s([^)]*)\)", text):
+            if _RISKY.search(expr):
+                raise AssemblyError(f"{f.name} contains an expression AI CAD won't evaluate for safety: ${{{expr.strip()[:80]}}}")
 
 
 def parse(path: str | Path) -> dict[str, Any]:
@@ -140,7 +177,9 @@ def parse(path: str | Path) -> dict[str, Any]:
         ax = je.find("axis")
         axis = _floats(ax.get("xyz") if ax is not None else None, 3) if ax is not None else [1.0, 0.0, 0.0]
         if np.linalg.norm(axis) < 1e-12:
-            raise AssemblyError(f"joint {je.get('name')}: axis is zero")
+            if jt in ("revolute", "continuous", "prismatic"):
+                raise AssemblyError(f"joint {je.get('name')}: axis is zero")
+            axis = [1.0, 0.0, 0.0]  # irrelevant for fixed joints
         parent, child = je.find("parent").get("link"), je.find("child").get("link")
         for ln in (parent, child):
             if ln not in links:
@@ -198,18 +237,25 @@ def resolve_uri(uri: str, urdf: Path) -> Path | None:
         return p if p.exists() else None
     if uri.startswith("package://"):
         pkg, _, rel = uri[10:].partition("/")
-        bases = [Path(b) for b in os.environ.get("ROS_PACKAGE_PATH", "").split(":") if b]
-        bases += list(urdf.resolve().parents)[:5]
-        for base in bases:
-            for cand in (base / pkg / rel, base / rel if base.name == pkg else None):
-                if cand and cand.exists():
-                    return cand
-            pkg_dir = _find_package(base, pkg)
-            if pkg_dir and (pkg_dir / rel).exists():
-                return pkg_dir / rel
-        return None
+        d = find_package(pkg, urdf)
+        return d / rel if d is not None and (d / rel).exists() else None
     p = (urdf.parent / uri) if not Path(uri).is_absolute() else Path(uri)
     return p if p.exists() else None
+
+
+def find_package(pkg: str, near: Path) -> Path | None:
+    """A ROS package folder: from ROS_PACKAGE_PATH, or found around the given file (no ROS install needed)."""
+    bases = [Path(b) for b in os.environ.get("ROS_PACKAGE_PATH", "").split(":") if b]
+    bases += list(near.resolve().parents)[:5]
+    for base in bases:
+        if base.name == pkg and (base / "package.xml").exists():
+            return base
+        if (base / pkg / "package.xml").exists():
+            return base / pkg
+        d = _find_package(base, pkg)
+        if d is not None:
+            return d
+    return None
 
 
 def _find_package(base: Path, pkg: str) -> Path | None:
@@ -228,6 +274,9 @@ def mesh_solid(path: Path, scale: list[float]) -> tuple[Any, dict[str, Any]]:
     import cadquery as cq
     import trimesh
 
+    with open(path, "rb") as fh:
+        if fh.read(40).startswith(b"version https://git-lfs"):
+            raise AssemblyError(f"{path.name} is a Git LFS placeholder; run 'git lfs pull' in its repository to get the real mesh")
     try:
         m = trimesh.load(str(path), force="mesh")
     except Exception as e:
@@ -249,18 +298,30 @@ def mesh_solid(path: Path, scale: list[float]) -> tuple[Any, dict[str, Any]]:
             report["decimated_to"] = int(len(m.faces))
         except Exception as e:  # fast-simplification missing: keep full detail
             report["decimation_skipped"] = str(e)
-    if not m.is_watertight:
-        trimesh.repair.fill_holes(m)
-    trimesh.repair.fix_normals(m)
-    closed = bool(m.is_watertight)
-    report["closed"] = closed
-    shape = _faces_to_shape(m.vertices, m.faces, closed)
-    report["faces"] = len(shape.Faces())
-    if closed:
-        v = shape.Volume()
-        if v < 0:  # inward normals
-            shape = cq.Shape.cast(shape.wrapped.Reversed())
-        report["volume_mm3"] = abs(v)
+    # A mesh file often holds several bodies (a servo, a bracket, loose surface patches): each closed body
+    # becomes a solid, anything still open after repair stays as surfaces.
+    bodies = m.split(only_watertight=False) if len(m.faces) > 3 else [m]
+    solids, shells = [], []
+    for body in bodies:
+        try:
+            if not body.is_watertight:
+                trimesh.repair.fill_holes(body)
+            trimesh.repair.fix_normals(body)
+        except Exception as e:  # repair is best effort
+            report["repair_failed"] = str(e)
+        piece = _faces_to_shape(body.vertices, body.faces, bool(body.is_watertight))
+        if body.is_watertight:
+            if piece.Volume() < 0:  # inward normals
+                piece = cq.Shape.cast(piece.wrapped.Reversed())
+            solids.append(piece)
+        else:
+            shells.append(piece)
+    parts = solids + shells
+    shape = parts[0] if len(parts) == 1 else cq.Compound.makeCompound(parts)
+    report.update(bodies=len(bodies), closed_bodies=len(solids), closed=not shells, faces=len(shape.Faces()))
+    report["_display"] = (np.asarray(m.vertices, dtype=np.float32), np.asarray(m.faces, dtype=np.int32))
+    if solids:
+        report["volume_mm3"] = sum(abs(x.Volume()) for x in solids)
     return shape, report
 
 
@@ -438,10 +499,13 @@ def import_urdf(urdf_path: str | Path, out_dir: str | Path | None = None, geomet
                         continue
                     fname = _unique(out, _safe(src.stem), ".brep", files)
                     shape.exportBrep(str(out / fname))
+                    v, f = mrep.pop("_display")  # display triangles: the viewer needn't re-mesh the solid
+                    np.savez_compressed(out / display_mesh_name(fname), vertices=v, faces=f)
                     files[key] = fname
                     report["meshes"][fname] = {"source": str(src), **mrep}
                     if not mrep["closed"]:
-                        report["warnings"].append(f"{src.name}: the mesh isn't closed, so it was imported as surfaces (no volume or mass)")
+                        report["warnings"].append(f"{src.name}: {mrep['bodies'] - mrep['closed_bodies']} of {mrep['bodies']} bodies aren't closed "
+                                                  "and were imported as surfaces; volume counts only the closed ones")
                     report["mesh_parts"] += 1
             else:
                 key = f"{g['kind']}:{json.dumps({k: round(v, 6) if isinstance(v, float) else v for k, v in g.items() if k in ('size', 'radius', 'length')}, sort_keys=True)}"
@@ -466,6 +530,7 @@ def import_urdf(urdf_path: str | Path, out_dir: str | Path | None = None, geomet
     apply_kinematics(spec)
     # masses from <inertial> vs the CAD volume of the same link
     vols: dict[str, float] = {}
+    partial: set[str] = set()
     for c in spec.components:
         p = out / c.file
         shape = cq.Shape.importBrep(str(p)) if p.suffix == ".brep" else None
@@ -473,10 +538,13 @@ def import_urdf(urdf_path: str | Path, out_dir: str | Path | None = None, geomet
             from .project import Project
             pr = Project.load(p)
             shape = pr.result.shape.val() if pr.result else None
-        if shape is not None and shape.isValid() and shape.ShapeType() == "Solid":
-            vols[c.link] = vols.get(c.link, 0.0) + abs(shape.Volume())
+        if shape is not None and shape.Solids():
+            vols[c.link] = vols.get(c.link, 0.0) + sum(abs(x.Volume()) for x in shape.Solids())
+            if shape.Shells() and len(shape.Shells()) > len(shape.Solids()):
+                partial.add(c.link)
     report["masses"] = [{"link": n, "mass_kg": l["mass_kg"], "cad_volume_mm3": round(vols[n], 1) if n in vols else None,
-                         "implied_density": round(l["mass_kg"] / (vols[n] * 1e-9)) if l["mass_kg"] and vols.get(n) else None}
+                         "implied_density": round(l["mass_kg"] / (vols[n] * 1e-9)) if l["mass_kg"] and vols.get(n) and n not in partial else None,
+                         "partial": n in partial}
                         for n, l in robot["links"].items() if l["mass_kg"] is not None]
     asm_path = out / f"{_safe(robot['name'])}.aicadasm"
     asm_path.write_text(json.dumps(spec.to_dict(), indent=2))
@@ -491,6 +559,10 @@ def _primitive_name(g: dict[str, Any]) -> str:
     if g["kind"] == "cylinder":
         return f"cylinder D{f(2 * g['radius'])} L{f(g['length'])}"
     return f"sphere D{f(2 * g['radius'])}"
+
+
+def display_mesh_name(brep_name: str) -> str:
+    return f"{Path(brep_name).stem}.mesh.npz"
 
 
 def _safe(s: str) -> str:

@@ -62,6 +62,8 @@ Open **⚙** in the app:
 | Ollama | free, runs locally | Needs a model with tool calling |
 | OpenAI or any OpenAI-compatible API | pay per use | Set the base URL and model |
 
+**Robots by name or link:** in the Assistant tab (Part or Assembly), say *"bring in the Hiwonder AiNex and raise its right arm"* or paste a GitHub link. With the Claude Code option it searches the web for the official repository. With other providers, give it the link. It downloads only the robot's folder to `~/Documents/AI-CAD-Downloads`, imports it, poses it, checks a rendered picture, and tells you the repository's licence. **From GitHub…** in the Assembly toolbar does the same by hand. Downloaded files are never run; xacro expressions that reach into Python internals are refused.
+
 You can also drive the app **from Claude Code itself**: run `scripts/setup-claude-code.sh` (add `--global` to use it from any folder), then in Claude Code: *"Read ~/drawings/bracket.pdf and build it in AI CAD"*. Changes appear live in the app.
 
 ## Honest limits

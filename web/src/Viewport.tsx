@@ -113,6 +113,7 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
     const grid = new THREE.GridHelper(400, 40, 0x6b7a8c, 0x8b98a8)
     grid.rotation.x = Math.PI / 2
     grid.position.z = -0.05 // keep the grid from z-fighting with faces at z=0
+    grid.name = 'grid'
     for (const m of [grid.material].flat()) Object.assign(m, { transparent: true, opacity: 0.28, depthWrite: false })
     scene.add(grid)
 
@@ -289,9 +290,9 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
       g.setAttribute('position', new THREE.Float32BufferAttribute(f.vertices, 3))
       g.setIndex(f.triangles)
       g.computeVertexNormals()
-      const base = f.color ? new THREE.Color(f.color).getHex() : COLORS.base
+      const base = f.color ? readable(f.color) : COLORS.base
       const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
-        color: base, metalness: 0.2, roughness: 0.5, side: THREE.DoubleSide,
+        color: base, metalness: 0.2, roughness: 0.5, side: THREE.DoubleSide, flatShading: f.type === 'MESH',
         polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
       }))
       m.userData = { index: f.index, feature: f.feature, base }
@@ -313,6 +314,10 @@ const Viewport = forwardRef<ViewportHandle, Props>(function Viewport(
       ctx.vertices = new THREE.Points(g, new THREE.PointsMaterial({ size: 7, sizeAttenuation: false, vertexColors: true }))
       ctx.part.add(ctx.vertices)
     }
+    // floor grid just under the part (robots often have their origin at the hips)
+    const grid = ctx.scene.getObjectByName('grid')
+    const low = new THREE.Box3().setFromObject(ctx.part).min.z
+    if (grid) grid.position.z = Math.min(0, Number.isFinite(low) ? low : 0) - 0.05
     if (!ctx.fitted) {
       setView(ctx, 'iso')
       ctx.fitted = true
@@ -465,6 +470,15 @@ function paint(ctx: Ctx, { selection, selectedFeature, mode }: { selection: SelR
     }
     c.needsUpdate = true
   }
+}
+
+/** A component colour, lifted when very dark so shading stays visible. */
+function readable(css: string) {
+  const c = new THREE.Color(css)
+  const hsl = { h: 0, s: 0, l: 0 }
+  c.getHSL(hsl)
+  if (hsl.l < 0.22) c.setHSL(hsl.h, hsl.s, 0.22)
+  return c.getHex()
 }
 
 function line(points: THREE.Vector3[], color: number, dashed = false) {

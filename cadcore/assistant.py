@@ -274,6 +274,17 @@ class Assistant:
         self.selection: list[dict[str, Any]] = []
         self.alternatives: list[dict[str, Any]] = []
         self.lock = None  # optional threading lock shared with manual edits
+        # extra validated tools supplied by the host app (e.g. assemblies, GitHub): name -> (schema, handler)
+        self.extra_tools: dict[str, tuple[dict[str, Any], Callable[[dict[str, Any]], dict[str, Any]]]] = {}
+        self.extra_prompt = ""
+
+    @property
+    def tools(self) -> list[dict[str, Any]]:
+        return TOOLS + [schema for schema, _ in self.extra_tools.values()]
+
+    @property
+    def system(self) -> str:
+        return SYSTEM + self.extra_prompt
 
     def reset(self) -> None:
         self.messages = []
@@ -289,6 +300,11 @@ class Assistant:
             return fn()
 
     def _run_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if name in self.extra_tools:
+            try:
+                return self.extra_tools[name][1](args)
+            except Exception as e:  # reported to the model, which can correct itself
+                return {"ok": False, "message": f"{name} failed: {e}"}
         p = self.project
         if name == "get_model":
             if not p.result and p.spec.is_empty:
@@ -415,8 +431,8 @@ class Assistant:
             response = client.beta.messages.create(
                 model=self.model,
                 max_tokens=16000,
-                system=SYSTEM,
-                tools=TOOLS,
+                system=self.system,
+                tools=self.tools,
                 messages=self.messages,
                 output_config={"effort": effort},
                 betas=["server-side-fallback-2026-07-01"],
@@ -488,9 +504,9 @@ class Assistant:
 
     def _loop_openai(self, client, before) -> Iterator[dict[str, Any]]:
         tools = [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
-                 for t in TOOLS]
+                 for t in self.tools]
         for _ in range(25):
-            resp = client.chat.completions.create(model=self.model, messages=[{"role": "system", "content": SYSTEM}, *self.oa_messages],
+            resp = client.chat.completions.create(model=self.model, messages=[{"role": "system", "content": self.system}, *self.oa_messages],
                                                   tools=tools, tool_choice="auto")
             choice = resp.choices[0]
             msg = choice.message

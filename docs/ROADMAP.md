@@ -117,3 +117,18 @@ Windows and macOS installers are not built. The code is portable, but the script
   - **Example:** `examples/robot_arm` (xacro, package:// meshes, a DAE in centimetres).
   - **Not supported:** floating and planar joints (imported as fixed), textures, dynamics.
   - **Tests:** `test_urdf.py` (6) and the `ui_urdf` suite.
+- **2026-10-20 (2):**
+  - **Real robot:** tested on Hiwonder AiNex, the official xacro with 25 STL meshes: 28 links, 24 movable joints, about 30 s to import, 0.5 s to open. Fixes along the way:
+    - `$(find pkg)` now resolves without ROS;
+    - fixed joints with a zero axis are accepted;
+    - meshes are split into bodies (closed ones become solids, open patches become surfaces, and the report shows the volume as partial);
+    - display triangles are saved next to each mesh solid, so opening is 100× faster;
+    - flat shading, lifted dark colours, and a floor grid under the robot.
+  - **Assistant:**
+    - `get_from_github` (list, then download only the needed ROS packages; GitHub only; hooks and symlinks off; licence reported; Git LFS detected);
+    - web search for the Claude Code provider;
+    - assembly tools (`import_urdf`, `move_joints`, `get_assembly`) for the built-in assistant too;
+    - `render_views(target="assembly")`: shaded 4-view pictures drawn on the server;
+    - an Assistant tab in the Assembly workspace, with live sync.
+  - **Verified end to end:** one chat message ("bring in the AiNex, raise its right arm, turn its head") made Claude Code find the repository, download 8 MB, import, pose and report the licence.
+  - **Tests:** 87 unit/API tests and 6 UI suites pass.

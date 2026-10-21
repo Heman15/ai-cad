@@ -125,10 +125,16 @@ def measure(refs: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 @mcp.tool()
-def render_views(projection: str = "first") -> Image:
-    """Picture of the current part: hidden-line front/top/side views, isometric, overall and hole dimensions. Use it to check your work."""
+def render_views(projection: str = "first", target: str = "auto") -> Image:
+    """Picture to check your work. target "part": hidden-line front/top/side views, isometric, overall and hole
+    dimensions of the open part. target "assembly": shaded isometric/front/right/top views of the assembly or robot in
+    its current pose. "auto" uses the part when it has geometry, otherwise the assembly."""
     import cairosvg
 
+    if target == "auto":
+        target = "part" if _req("GET", "/api/model").get("entities") else "assembly"
+    if target == "assembly":
+        return Image(data=_req("GET", "/api/asm/render.png?size=700"), format="png")
     svg = _req("GET", f"/api/drawing.svg?sheet=A3&projection={projection}")
     return Image(data=cairosvg.svg2png(bytestring=svg, output_width=1600), format="png")
 
@@ -261,6 +267,15 @@ def assembly(command: str = "get", args: dict[str, Any] | None = None) -> dict[s
         m = {**r["model"], "result": r["result"]}
     m.pop("entities", None)
     return m
+
+
+@mcp.tool()
+def get_from_github(url: str, path: str | None = None) -> dict[str, Any]:
+    """Public GitHub repositories only. Without path: list the repository's URDF/xacro and STEP files (no download).
+    With path: download that file's folder (its ROS package, so meshes come along) and return the local file,
+    the top-level entry points and the licence note (always tell the user the licence note).
+    Then import a robot with assembly(command="import_urdf", args={"path": <entry point>})."""
+    return _req("POST", "/api/github", {"url": url, "path": path})
 
 
 if __name__ == "__main__":

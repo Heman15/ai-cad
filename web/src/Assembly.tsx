@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { desktop, fmt, type Json, type Model, type SelRef } from './api'
+import { api, desktop, fmt, type Json, type Model, type SelRef, type Settings } from './api'
+import Chat from './Chat'
+import SettingsDialog from './Settings'
 import ErrorBoundary from './ErrorBoundary'
 import Viewport, { type StdView, type ViewportHandle } from './Viewport'
 import * as THREE from 'three'
@@ -65,6 +67,12 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
   const asmRef = useRef(asm)
   asmRef.current = asm
 
+  const [rtab, setRtab] = useState<'assistant' | 'details'>('details')
+  const [settings, setSettings] = useState<Settings | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const [gh, setGh] = useState<{ url: string; repository: string; robot_files: string[]; step_files: string[]; licence: string } | null>(null)
+  useEffect(() => { api.info().then((i) => setSettings(i.ai)).catch(() => {}) }, [])
+
   const refresh = useCallback((m: AsmModel) => {
     setAsm(m); setClashes(null); setMarkers([]); setPoses({})
     setJoints(Object.fromEntries((m.spec.robot?.joints ?? []).map((j) => [j.name, j.value])))
@@ -106,8 +114,24 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
     setJoints((j) => ({ ...j, ...vals }))
     sendJoints(vals)
   }
-  const importUrdf = async () => {
-    const path = desktop ? await desktop.openFileDialog('Import robot (URDF or xacro)', URDF) : window.prompt('Path to the .urdf or .xacro file on this computer')
+  const fromGithub = async (url: string, path?: string) => {
+    setStatus({ ok: true, text: path ? `downloading ${path.split('/').pop()}…` : `looking in ${url}…` })
+    try {
+      const r = await call<Record<string, Json>>('/api/github', { url, path })
+      if (r.file) {  // downloaded: import its top-level robot file
+        const entry = ((r.entry_points as string[]) ?? [])[0] ?? (r.file as string)
+        setGh(null)
+        await importUrdf(entry)
+        setStatus({ ok: true, text: `imported from GitHub · ${r.licence}` })
+      } else {
+        setGh({ url, ...(r as unknown as { repository: string; robot_files: string[]; step_files: string[]; licence: string }) })
+        setRtab('details')
+        setStatus({ ok: true, text: String(r.message) })
+      }
+    } catch (e) { setStatus({ ok: false, text: (e as Error).message }) }
+  }
+  const importUrdf = async (given?: string) => {
+    const path = given ?? (desktop ? await desktop.openFileDialog('Import robot (URDF or xacro)', URDF) : window.prompt('Path to the .urdf or .xacro file on this computer'))
     if (!path) return
     setStatus({ ok: true, text: `converting ${path.split('/').pop()}…` })
     try {
@@ -119,6 +143,19 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
     } catch (e) { setStatus({ ok: false, text: (e as Error).message }) }
   }
   useEffect(() => { call<AsmModel>('/api/asm').then(refresh).catch((e) => setStatus({ ok: false, text: e.message })) }, [refresh])
+  // Live sync: the assistant (in-app or Claude Code) may import robots or move joints.
+  const seen = useRef<string | null>(null)
+  useEffect(() => {
+    const t = setInterval(async () => {
+      if (busy.current) return
+      try {
+        const v = await api.version()
+        if (seen.current !== null && v.asm !== seen.current) refresh(await call<AsmModel>('/api/asm'))
+        seen.current = v.asm
+      } catch { /* backend restarting */ }
+    }, 1000)
+    return () => clearInterval(t)
+  }, [refresh])
 
   const cmd = async (command: string, args: Record<string, unknown>) => {
     try {
@@ -189,7 +226,10 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
         <div className="group">
           {!desktop && <input placeholder="/path/to/part.aicad" value={partPath} onChange={(e) => setPartPath(e.target.value)} />}
           <button className="primary" onClick={insert}>＋ Insert part</button>
-          <button onClick={importUrdf} title="Convert a robot description (URDF or xacro) into parts and an assembly with movable joints">Import URDF</button>
+          <button onClick={() => importUrdf()} title="Convert a robot description (URDF or xacro) into parts and an assembly with movable joints">Import URDF</button>
+          <button onClick={() => { const u = window.prompt('GitHub link to a robot repository, folder or URDF/xacro file'); if (u) fromGithub(u.trim()) }}
+            title="Download a robot description from a public GitHub repository">From GitHub…</button>
+          <button onClick={() => setShowSettings(true)} title="AI settings">⚙</button>
         </div>
         <div className="group seg">
           {views.map((v) => <button key={v} onClick={() => viewRef.current?.view(v)}>{v}</button>)}
@@ -267,7 +307,26 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
       </main>
 
       <aside className="right">
-        <div className="tab-body scroll">
+        <div className="tabs">
+          <button className={rtab === 'assistant' ? 'on' : ''} onClick={() => setRtab('assistant')}>Assistant</button>
+          <button className={rtab === 'details' ? 'on' : ''} onClick={() => setRtab('details')}>Assembly</button>
+        </div>
+        <div className={`tab-body ${rtab === 'assistant' ? '' : 'hidden'}`}>
+          <Chat selection={[]} onModel={() => {}} aiReady={!!settings?.ready} openSettings={() => setShowSettings(true)} />
+        </div>
+        <div className={`tab-body scroll ${rtab === 'details' ? '' : 'hidden'}`}>
+          {gh && (
+            <section>
+              <h2>GitHub · {gh.repository} <button className="link" onClick={() => setGh(null)}>hide</button></h2>
+              <p className="small warn">{gh.licence}</p>
+              {gh.robot_files.length === 0 && gh.step_files.length === 0 && <p className="muted small">No URDF, xacro or STEP files in this repository.</p>}
+              <ul className="findings">
+                {gh.robot_files.map((f) => <li key={f}><span title={f}>{f.split('/').slice(-3).join('/')}</span>
+                  <button className="link" onClick={() => fromGithub(gh.url, f)}>import</button></li>)}
+              </ul>
+              {gh.step_files.length > 0 && <p className="muted small">{gh.step_files.length} STEP file(s) too; download one and insert it as a part.</p>}
+            </section>
+          )}
           <section>
             <h2>Mate selected faces</h2>
             <p className="small">{faces.length === 0 ? 'No faces selected.' : faces.map((f) => `${f.type.toLowerCase()} of ${f.component}`).join('  +  ')}</p>
@@ -336,6 +395,7 @@ export default function AssemblyWorkspace({ modeSwitch }: { modeSwitch: React.Re
           </section>
         </div>
       </aside>
+      {showSettings && settings && <SettingsDialog settings={settings} onSaved={setSettings} onClose={() => setShowSettings(false)} />}
     </div>
   )
 }

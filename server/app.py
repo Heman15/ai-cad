@@ -82,11 +82,70 @@ def _client():
     return anthropic.Anthropic(api_key=key, base_url=c.get("base_url") or None)
 
 
+ROBOT_PROMPT = """
+
+Robots and assemblies (separate Assembly workspace; the user switches with the Part/Assembly buttons):
+- To bring in a robot from GitHub: get_from_github(url) lists its URDF/xacro files; then get_from_github(url, path) downloads
+  that file's package; then import_urdf(path) with the reported entry point (the top-level .xacro/.urdf).
+  If the user names a robot without a link, ask for the GitHub link (you can't search the web).
+- Always pass on the licence note from get_from_github.
+- move_joints poses the robot (degrees, mm for sliding joints) within the joint limits; get_assembly shows joints and parts.
+- Meshes from URDF become solids without feature history; box/cylinder/sphere links become editable parts."""
+
+
+def _tool_schema(name: str, description: str, props: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    return {"name": name, "description": description,
+            "input_schema": {"type": "object", "properties": props, "required": required, "additionalProperties": False}}
+
+
+def _robot_tools() -> dict[str, tuple[dict[str, Any], Any]]:
+    def gh(args):
+        return github_fetch(GithubIn(**args))
+
+    def imp(args):
+        r = asm_import_urdf(UrdfIn(path=args["path"], geometry=args.get("geometry", "visual")))
+        rep = r["report"]
+        return {"ok": True, "message": f"imported {rep['robot']}: {rep['links']} links, {rep['joints']} joints, "
+                                       f"{rep['parametric_parts']} editable parts, {rep['mesh_parts']} mesh solids; saved {r['path']}",
+                "skipped": rep["skipped"], "warnings": rep["warnings"][:10], "joints": _joint_summary()}
+
+    def move(args):
+        with LOCK:
+            r = _asm().move_joints(args["values"])
+        return {**r, "joints": _joint_summary()}
+
+    def info(_args):
+        with LOCK:
+            a = _asm()
+            return {"ok": True, "message": f"assembly {a.spec.name}: {len(a.spec.components)} components",
+                    "components": [{"id": c.id, "file": c.file, "link": c.link} for c in a.spec.components][:80],
+                    "joints": _joint_summary(), "mates": a.spec.mates, "status": a.status}
+
+    return {
+        "get_from_github": (_tool_schema("get_from_github", "List (no path) or download (with path) robot descriptions and STEP files from a public GitHub repository. Only github.com links.",
+                                         {"url": {"type": "string"}, "path": {"type": "string", "description": "File inside the repository to download, from the listing"}}, ["url"]), gh),
+        "import_urdf": (_tool_schema("import_urdf", "Convert a local URDF or xacro file into an assembly with movable joints and open it in the Assembly workspace.",
+                                     {"path": {"type": "string"}, "geometry": {"type": "string", "enum": ["visual", "collision"]}}, ["path"]), imp),
+        "move_joints": (_tool_schema("move_joints", "Set robot joint values: degrees for revolute/continuous joints, mm for prismatic. Limits are enforced.",
+                                     {"values": {"type": "object", "additionalProperties": {"type": "number"}}}, ["values"]), move),
+        "get_assembly": (_tool_schema("get_assembly", "The open assembly: components, joints (with limits and values) and mates.", {}, []), info),
+    }
+
+
+def _joint_summary() -> list[dict[str, Any]]:
+    a = _asm()
+    if not a.spec.robot:
+        return []
+    return [{k: j[k] for k in ("name", "type", "lower", "upper", "value", "mimic")} for j in a.spec.robot["joints"] if j["type"] != "fixed"]
+
+
 def assistant() -> Assistant:
     c = config.load()
     if S.assistant is None:
         S.assistant = Assistant(S.project, client_factory=_client)
         S.assistant.lock = LOCK
+        S.assistant.extra_tools = _robot_tools()
+        S.assistant.extra_prompt = ROBOT_PROMPT
     S.assistant.project = S.project
     if S.assistant.provider != c["provider"]:
         S.assistant.reset()  # message formats differ between providers
@@ -551,7 +610,7 @@ class AsmState:
 
 A = AsmState()
 _ASM_MESH_CACHE: dict[str, Any] = {}
-BIG_SHAPE_FACES = 1500
+BIG_SHAPE_FACES = 400  # above this, a component is shown as one surface (meshes from URDF)
 
 
 def _asm():
@@ -575,11 +634,20 @@ def _local_entities(path: str, shape) -> dict[str, Any]:
         return _ASM_MESH_CACHE[key]
     all_faces = shape.Faces()
     if len(all_faces) > BIG_SHAPE_FACES:  # e.g. an organic mesh: one surface, no per-face picking or edges
-        verts, tris = shape.tessellate(0.05, 0.2)
-        bb = shape.BoundingBox()
-        out = {"faces": [{"index": 0, "type": "MESH", "point": list(bb.center.toTuple()), "area": round(shape.Area(), 3),
-                          "center": list(bb.center.toTuple()),
-                          "vertices": [c for v in verts for c in v.toTuple()], "triangles": [k for t in tris for k in t]}],
+        import numpy as np
+
+        from cadcore.urdf import display_mesh_name
+
+        side = Path(path).with_name(display_mesh_name(Path(path).name))
+        if side.exists():  # triangles saved at URDF import: no re-meshing
+            d = np.load(side)
+            V, F = d["vertices"].astype(float), d["faces"]
+        else:
+            verts, tris = shape.tessellate(0.05, 0.2)
+            V, F = np.array([v.toTuple() for v in verts]), np.array(tris)
+        center = ((V.min(0) + V.max(0)) / 2).round(4).tolist()
+        out = {"faces": [{"index": 0, "type": "MESH", "point": center, "area": None, "center": center,
+                          "vertices": V.round(4).ravel().tolist(), "triangles": F.ravel().tolist()}],
                "edges": []}
         _ASM_MESH_CACHE[key] = out
         return out
@@ -706,6 +774,40 @@ def asm_import_urdf(body: UrdfIn):
     with LOCK:
         A.project = proj
         return {"model": asm_snapshot(), "report": r["report"], "path": r["assembly"]}
+
+
+@app.get("/api/asm/render.png")
+def asm_render(size: int = 700):
+    """Shaded 4-view picture of the assembly in its current pose (for the assistant to check its work)."""
+    from cadcore.render import render_sheet
+
+    with LOCK:
+        snap = asm_snapshot()
+        robot = A.project.spec.robot if A.project else None
+    faces = (snap["entities"] or {}).get("faces", [])
+    if not faces:
+        raise HTTPException(400, "the assembly is empty")
+    moved = [f"{j['name']}={j['value']:g}" for j in (robot or {}).get("joints", []) if j.get("value")]
+    title = f"{snap['spec']['name']}" + (f"  ·  {', '.join(moved)[:160]}" if moved else "")
+    return Response(render_sheet(faces, max(300, min(size, 1000)), title), media_type="image/png")
+
+
+class GithubIn(BaseModel):
+    url: str
+    path: str | None = None
+
+
+@app.post("/api/github")
+def github_fetch(body: GithubIn):
+    """List (no path) or download (path) files from a public GitHub repository. Nothing downloaded is executed."""
+    from cadcore import fetch
+
+    try:
+        linked = fetch.parse_url(body.url)["path"] or ""
+        target = body.path or (linked if linked.lower().endswith(fetch.ROBOT_EXT + fetch.CAD_EXT) else None)
+        return fetch.get(body.url, target) if target else fetch.browse(body.url)
+    except fetch.FetchError as e:
+        raise HTTPException(400, str(e))
 
 
 class JointsIn(BaseModel):

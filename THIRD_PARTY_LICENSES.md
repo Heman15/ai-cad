@@ -17,6 +17,7 @@ AI CAD is distributed under the GNU AGPL v3 (see `LICENSE`). It uses the followi
 | trimesh | 5.1.1 | MIT | reading robot meshes (STL, OBJ, PLY, DAE) |
 | pycollada | 0.9.3 | BSD-3-Clause | COLLADA (.dae) meshes |
 | xacro | 2.1.1 | BSD-3-Clause | expanding xacro robot descriptions |
+| NetworkX | 3.7 | BSD-3-Clause | mesh hole repair (via trimesh) |
 | fast-simplification | 0.2.0 | MIT | reducing very large meshes |
 | FastAPI | 0.146.0 | MIT | local HTTP API |
 | Uvicorn | 0.54.0 | BSD-3-Clause | HTTP server |
