@@ -108,6 +108,11 @@ A part becomes sheet metal when `spec.sheet` (thickness, bend radius, K-factor) 
 - **Mate solver:** unknowns are a translation and a rotation vector per free component. Before Gauss–Newton runs, a pre-alignment pass orients and places components, because a face needing a 180° flip is a saddle point for the solver.
 - **Interference:** pairwise boolean intersection, after a bounding-box test.
 
+### Mesh → parametric parts (`cadcore/reverse.py`, `cadcore/parts.py`)
+- **Rebuild:** sheet metal (face pairs one thickness apart → flanges, corner vertices → bends, outlines trimmed to the bend tangent lines so the bodies meet exactly) or 2.5D extrusions; the result is a normal feature tree.
+- **Acceptance:** symmetric difference with the mesh by ray casting (OCC booleans are unreliable when the faces lie on each other); above 5% the part stays a mesh and the reason is reported.
+- **Parts package:** bodies grouped by shape (principal frame, surface distance, mirror detection), classified with evidence, written as BOM + per-part STEP/STL/drawing/flat pattern.
+
 ### Known architectural limits
 - Topological naming uses geometric signatures, not OCC history. A reference survives changes that keep its face or edge in place, and is reported missing otherwise.
 - The local HTTP API has no authentication. It listens only on 127.0.0.1, but any local process could call it.

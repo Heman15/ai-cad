@@ -20,6 +20,7 @@ Describe a part or drop in a drawing. The assistant asks for whatever it needs, 
 | **Sheet metal** | Base and edge flanges and open/closed hems with real bends, corner-collision checks, flat pattern with bend allowance, DXF export |
 | **Assemblies** | Parts linked by file, mates (coincident, distance, parallel, concentric), interference check, bill of materials, STEP export |
 | **Robots (URDF)** | Import URDF or xacro: box/cylinder/sphere links become editable parts, STL/OBJ/DAE meshes become solids (flat faces recovered), joints become sliders with limits and mimic joints; export the posed robot to STEP |
+| **Mesh → parts** | Rebuild meshes as editable parts: sheet metal (thickness, flanges, bends, holes and slots as variables) or extrusions, accepted only within 5% of the mesh. A parts package for a whole robot groups identical and mirror-image parts and writes a BOM, STEP/STL, drawings and flat-pattern DXFs |
 | **Desktop app** | SolidWorks-style ribbon, FeatureManager tree, heads-up view toolbar, light and dark themes. Runs locally (Electron + Python); projects are plain JSON; STEP/STL export |
 
 | Constraint sketcher | Drawing → CAD, traceable |

@@ -8,7 +8,7 @@ AI CAD is distributed under the GNU AGPL v3 (see `LICENSE`). It uses the followi
 | cadquery-ocp (OCP bindings) | 7.9.3 | Apache-2.0 (bindings) | Python bindings to OpenCascade |
 | Open CASCADE Technology (bundled in cadquery-ocp) | 7.9 | LGPL-2.1 with Open CASCADE exception | geometry kernel (B-rep, booleans, HLR) |
 | Gmsh | 4.15.2 | GPL-2.0-or-later | finite-element meshing |
-| SciPy | 1.18.1 | BSD-3-Clause | sparse solver (FEA) |
+| SciPy | 1.18.1 | BSD-3-Clause | sparse solver (FEA); nearest-point search (part grouping) |
 | NumPy | 2.5.4 | BSD-3-Clause and others | numerics |
 | ezdxf | 1.4.5 | MIT | DXF export (flat patterns) |
 | CairoSVG | 2.9.1 | LGPL-3.0-or-later | SVG → PDF/PNG for drawings |
@@ -17,7 +17,8 @@ AI CAD is distributed under the GNU AGPL v3 (see `LICENSE`). It uses the followi
 | trimesh | 5.1.1 | MIT | reading robot meshes (STL, OBJ, PLY, DAE) |
 | pycollada | 0.9.3 | BSD-3-Clause | COLLADA (.dae) meshes |
 | xacro | 2.1.1 | BSD-3-Clause | expanding xacro robot descriptions |
-| NetworkX | 3.7 | BSD-3-Clause | mesh hole repair (via trimesh) |
+| NetworkX | 3.7 | BSD-3-Clause | mesh hole repair (via trimesh); flange/bend graphs (mesh → part) |
+| Shapely (GEOS) | 2.2.0 | BSD-3-Clause (GEOS: LGPL-2.1) | 2D outlines when rebuilding parts from meshes |
 | fast-simplification | 0.2.0 | MIT | reducing very large meshes |
 | FastAPI | 0.146.0 | MIT | local HTTP API |
 | Uvicorn | 0.54.0 | BSD-3-Clause | HTTP server |

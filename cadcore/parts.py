@@ -335,10 +335,23 @@ def classify(g: Group, purchased_min_qty: int = PURCHASED_MIN_QTY, rebuild: bool
     qty = len(g.bodies)
     big = max(b.size)
     if b.closed and rebuild:
-        try:
-            rb = reverse.rebuild(b.mesh, g.name or "part")
-        except Exception as e:  # never let one part stop the package
-            rb = {"ok": False, "reason": f"not convertible: analysis failed ({type(e).__name__}: {e})", "report": {}}
+        # copies from different mesh files can differ in quality: try up to three of them, keep the first that rebuilds
+        tried, rb = set(), None
+        for cand in g.bodies:
+            if cand.source in tried or len(tried) >= 3:
+                continue
+            tried.add(cand.source)
+            try:
+                r = reverse.rebuild(cand.mesh, g.name or "part")
+            except Exception as e:  # never let one part stop the package
+                r = {"ok": False, "reason": f"not convertible: analysis failed ({type(e).__name__}: {e})", "report": {}}
+            if rb is None or r["ok"]:
+                rb = r
+            if r["ok"]:
+                g.bodies.remove(cand)
+                g.bodies.insert(0, cand)  # files are written from the body that was rebuilt
+                b = cand
+                break
         g.rebuild = rb
         if rb["ok"]:
             rep = rb["report"]

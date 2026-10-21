@@ -15,6 +15,7 @@ pycollada==0.9.3
 pydantic==2.14.1
 pypdfium2==5.14.0
 scipy==1.18.1
+shapely==2.2.0
 trimesh==5.1.1
 uvicorn==0.54.0
 xacro==2.1.1
