@@ -301,3 +301,30 @@ def get_from_github(url: str, path: str | None = None) -> dict[str, Any]:
 
 if __name__ == "__main__":
     mcp.run("stdio")
+
+
+# ---------------- parts from meshes ----------------
+
+@mcp.tool()
+def make_parts_package(overrides: dict[str, Any] | None = None, out_dir: str | None = None, licence_note: str | None = None,
+                       drawings: bool = True) -> dict[str, Any]:
+    """Parts package of the open (saved) assembly: splits its meshes into bodies, groups identical and mirror-image
+    (left/right) parts, classifies each as sheet_metal / purchased / custom with measured evidence and a confidence,
+    rebuilds sheet-metal and extruded parts as parametric .aicad parts (accepted only within 5% of the mesh), and writes
+    <name>_parts/ with BOM.csv, README.md and per part STEP, STL, drawing.pdf, preview.png and flat.dxf (unfolded sheet
+    metal). overrides corrects the result: {"PN-004": "purchased"} or {"PN-004": {"category": "custom", "name": "hip bracket"}}.
+    Slow for big robots (minutes). Tell the user which classifications have low confidence, and the licence note."""
+    r = _req("POST", "/api/parts/package", {"overrides": overrides, "out_dir": out_dir, "licence_note": licence_note,
+                                             "drawings": drawings}, timeout=3600)
+    r["parts"] = [{k: p[k] for k in ("part_number", "name", "category", "qty", "size_mm", "thickness_mm", "status", "confidence", "reason", "mirror_of")}
+                  for p in r["parts"]]
+    return r
+
+
+@mcp.tool()
+def rebuild_part_from_mesh(path: str, body: int | None = None, scale: float = 1.0) -> dict[str, Any]:
+    """Rebuild one body of a mesh (STL/OBJ/PLY in mm, or scale=1000 for metres; or a .brep from a URDF import) as an
+    editable parametric part: sheet metal (thickness, flanges, bends, holes as variables) or a stack of extrusions.
+    The result is compared with the mesh and refused above 5% difference ("not convertible: <reason>").
+    On success it is saved as <name>_rebuilt.aicad and opened in the app. body: index, largest first."""
+    return _req("POST", "/api/parts/rebuild", {"path": path, "body": body, "scale": scale}, timeout=900)

@@ -144,8 +144,8 @@ def assistant() -> Assistant:
     if S.assistant is None:
         S.assistant = Assistant(S.project, client_factory=_client)
         S.assistant.lock = LOCK
-        S.assistant.extra_tools = _robot_tools()
-        S.assistant.extra_prompt = ROBOT_PROMPT
+        S.assistant.extra_tools = {**_robot_tools(), **_parts_tools()}
+        S.assistant.extra_prompt = ROBOT_PROMPT + PARTS_PROMPT
     S.assistant.project = S.project
     if S.assistant.provider != c["provider"]:
         S.assistant.reset()  # message formats differ between providers
@@ -907,6 +907,123 @@ def asm_export(body: PathIn):
     with LOCK:
         _asm().export_step(str(Path(body.path).expanduser()))
     return {"ok": True, "message": f"assembly exported to {body.path}"}
+
+
+# ---------------- parts package (mesh -> parametric parts) ----------------
+
+PARTS_PROMPT = """
+
+Parts from meshes (robots and other assemblies imported from URDF/STL):
+- make_parts_package(overrides?, out_dir?) splits the open, saved assembly into distinct parts, groups identical and
+  mirrored ones, classifies each (sheet_metal / purchased / custom, with measured evidence and a confidence) and writes a
+  folder: BOM.csv, README.md and per part part.aicad (only if rebuilt), STEP, STL, drawing PDF, preview, flat.dxf for
+  sheet metal. It can take minutes for a big robot. Report the summary and the folder; point out low-confidence
+  classifications and offer to correct them with overrides {"PN-012": "purchased"} or {"PN-012": {"name": "knee bracket"}}.
+- rebuild_part_from_mesh(path) rebuilds one mesh body as an editable parametric part and opens it in the Part workspace.
+- Only sheet metal (flat flanges + bends) and extrusions are rebuilt, and only when the rebuilt part differs from the
+  mesh by less than 5%; otherwise say "not convertible" with the reason. Never invent dimensions: they all come from the
+  mesh and must be verified before manufacture. Pass on the source model's licence."""
+
+
+class PartsPackageIn(BaseModel):
+    out_dir: str | None = None
+    overrides: dict[str, Any] | None = None
+    licence_note: str | None = None
+    drawings: bool = True
+
+
+@app.post("/api/parts/package")
+def parts_package(body: PartsPackageIn):
+    """Parts package of the open assembly (it must be saved): BOM, part files, drawings, flat patterns."""
+    from cadcore.parts import make_package
+
+    with LOCK:
+        path = A.project.path if A.project else None
+    if not path:
+        raise HTTPException(400, "open or save an assembly first (the package is built from its saved part files)")
+    try:
+        r = make_package(path, Path(body.out_dir).expanduser() if body.out_dir else None, overrides=body.overrides,
+                         licence_note=body.licence_note or "", drawings=body.drawings)
+    except (ValueError, OSError) as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "folder": r["folder"], "summary": r["summary"], "parts": r["parts"]}
+
+
+class RebuildIn(BaseModel):
+    path: str
+    body: int | None = None  # index of the body, largest first; default: the largest closed one
+    scale: float = 1.0  # factor to mm for STL/OBJ/PLY (1000 for meshes in metres)
+    open: bool = True
+
+
+@app.post("/api/parts/rebuild")
+def parts_rebuild(body: RebuildIn):
+    """Rebuild one body of a mesh file (STL/OBJ/PLY, or a URDF import's .brep) as a parametric part; opens it."""
+    import numpy as np
+    import trimesh
+
+    from cadcore import reverse
+    from cadcore.parts import split_bodies
+    from cadcore.urdf import display_mesh_name
+
+    src = Path(body.path).expanduser()
+    if not src.exists():
+        raise HTTPException(400, f"file not found: {src}")
+    try:
+        npz = src.with_name(display_mesh_name(src.name))
+        if src.suffix.lower() == ".brep" and npz.exists():
+            d = np.load(npz)
+            V, F = d["vertices"].astype(float), d["faces"]
+        else:
+            m = trimesh.load(str(src), force="mesh")
+            V, F = np.asarray(m.vertices) * body.scale, np.asarray(m.faces)
+    except Exception as e:  # any reader error is the file's problem
+        raise HTTPException(400, f"could not read {src.name}: {e}")
+    bodies = sorted(split_bodies(V, F), key=lambda b: -b.area)
+    if not bodies:
+        raise HTTPException(400, "the mesh has no triangles")
+    if body.body is not None:
+        if not 0 <= body.body < len(bodies):
+            raise HTTPException(400, f"body must be 0..{len(bodies) - 1}")
+        pick = bodies[body.body]
+    else:
+        pick = next((b for b in bodies if b.is_watertight), bodies[0])
+    rb = reverse.rebuild(pick, src.stem)
+    out = {"ok": rb["ok"], "bodies": len(bodies), "report": {k: v for k, v in (rb.get("report") or {}).items() if k != "cutouts"}}
+    if not rb["ok"]:
+        return {**out, "message": rb["reason"]}
+    part = src.with_name(f"{src.stem}_rebuilt.aicad")
+    part.write_text(json.dumps(rb["spec"], indent=2))
+    out.update(message=f"rebuilt as {rb['kind'].replace('_', ' ')} (differs from the mesh by {rb['mismatch_pct']}%); saved {part}",
+               path=str(part), mismatch_pct=rb["mismatch_pct"], kind=rb["kind"])
+    if body.open:
+        with LOCK:
+            _replace_project(rb["project"], str(part))
+    return out
+
+
+def _parts_tools() -> dict[str, tuple[dict[str, Any], Any]]:
+    def package(args):
+        r = parts_package(PartsPackageIn(**args))
+        low = [f"{p['part_number']} {p['category']} ({p['confidence']}): {p['reason'][:80]}" for p in r["parts"] if p["confidence"] < 0.6]
+        return {"ok": True, "message": f"parts package written to {r['folder']}", "summary": r["summary"],
+                "parts": [{k: p[k] for k in ("part_number", "name", "category", "qty", "size_mm", "thickness_mm", "status", "confidence")}
+                          for p in r["parts"]][:60], "low_confidence": low[:30]}
+
+    def rebuild(args):
+        return parts_rebuild(RebuildIn(**args))
+
+    return {
+        "make_parts_package": (_tool_schema("make_parts_package", "Split the open assembly into distinct parts (identical and mirrored bodies grouped), "
+                                            "classify them (sheet_metal/purchased/custom) and write BOM.csv, part files (.aicad when rebuilt, STEP, STL), "
+                                            "drawings and flat patterns. Slow for big robots.",
+                                            {"overrides": {"type": "object", "description": 'part number -> category or name, e.g. {"PN-004": "purchased"}'},
+                                             "out_dir": {"type": "string"}, "licence_note": {"type": "string"},
+                                             "drawings": {"type": "boolean"}}, []), package),
+        "rebuild_part_from_mesh": (_tool_schema("rebuild_part_from_mesh", "Rebuild one body of a mesh file (STL/OBJ/PLY or an imported .brep) as an "
+                                                "editable parametric part (sheet metal or extrusion), checked against the mesh, and open it.",
+                                                {"path": {"type": "string"}, "body": {"type": "integer"}, "scale": {"type": "number"}}, ["path"]), rebuild),
+    }
 
 
 # ---------------- AI ----------------

@@ -276,8 +276,12 @@ def _frange(a: float, b: float, step: float):
 
 
 def make_drawing(result: BuildResult, spec: PartSpec, sheet: str = "A3", projection: str = "first",
-                 sections: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                 sections: list[dict[str, Any]] | None = None, extra_notes: list[str] | None = None,
+                 source_note: str | None = None) -> dict[str, Any]:
     """Return {"svg": str, "scale": "1:2", "sheet": "A3", "views": [...], "warnings": [...]}.
+
+    extra_notes: more lines for the notes block; source_note replaces "Generated from the parametric model; ..."
+    (e.g. for a part recovered from a mesh).
 
     sections: [{"plane": "XY"|"YZ"|"XZ", "offset": mm (default: through the middle), "flip": bool,
     "label": "A", "view": parent view for the cutting line}] -> hatched section views A-A, B-B, ...
@@ -537,7 +541,8 @@ def make_drawing(result: BuildResult, spec: PartSpec, sheet: str = "A3", project
     tol_note = (f"Untoleranced dimensions: {general}." if general else "Tolerances: NOT SPECIFIED — add before manufacture.")
     finish_note = (f"Surface finish Ra {_fmt(finish_all)} µm unless otherwise stated." if finish_all else "Surface finish: NOT SPECIFIED.")
     lost = [f"{i}: {st['message']}" for i, st in status.items() if not st["ok"]]
-    notes = [tol_note, finish_note, "Generated from the parametric model; verify all dimensions before use.", *notes,
+    notes = [tol_note, finish_note, source_note or "Generated from the parametric model; verify all dimensions before use.",
+             *(extra_notes or []), *notes,
              *(f"ANNOTATION NOT SHOWN — {m}" for m in lost)]
 
     # table of toleranced dimensions (every tolerance, including ones not on an automatic dimension)
