@@ -56,7 +56,11 @@ with sync_playwright() as pw:
     page.screenshot(path=OUT / "ui-urdf-arm.png")
     print(f"✓ gripper opens 15 mm, mimic finger follows (gap {gap:.1f} mm); screenshot")
 
-    expect(page.locator("table.dims").last).to_contain_text("finger")
+    page.get_by_role("tab", name="Evaluate").click()
+    page.get_by_role("button", name="Bill of Materials").click()
+    expect(page.locator("table.bom")).to_contain_text("finger")
+    page.get_by_role("button", name="Mass Properties").click()
+    expect(page.locator(".tab-body.pm")).to_contain_text("URDF mass")  # links without a material use the URDF mass
     bom = api.get("/api/asm").json()["bom"]
     assert any(r["part"] == "finger" and r["qty"] == 2 for r in bom) and any(r["part"].startswith("cylinder D60 L250") and r["qty"] == 2 for r in bom)
     step = api.get("/api/asm/export.step")

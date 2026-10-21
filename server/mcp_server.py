@@ -16,6 +16,7 @@ import ast
 import base64
 import json
 import os
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -125,17 +126,20 @@ def measure(refs: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 @mcp.tool()
-def render_views(projection: str = "first", target: str = "auto") -> Image:
+def render_views(projection: str = "first", target: str = "auto", sections: list[dict[str, Any]] | None = None) -> Image:
     """Picture to check your work. target "part": hidden-line front/top/side views, isometric, overall and hole
     dimensions of the open part. target "assembly": shaded isometric/front/right/top views of the assembly or robot in
-    its current pose. "auto" uses the part when it has geometry, otherwise the assembly."""
+    its current pose. "auto" uses the part when it has geometry, otherwise the assembly.
+    sections (part only): hatched section views, e.g. [{"plane": "XZ"}] = section A-A through the middle, seen from the
+    front; each {plane: XY|YZ|XZ, offset (mm along the plane's normal axis; default the middle), flip, label, view}."""
     import cairosvg
 
     if target == "auto":
         target = "part" if _req("GET", "/api/model").get("entities") else "assembly"
     if target == "assembly":
         return Image(data=_req("GET", "/api/asm/render.png?size=700"), format="png")
-    svg = _req("GET", f"/api/drawing.svg?sheet=A3&projection={projection}")
+    q = f"&sections={urllib.parse.quote(json.dumps(sections))}" if sections else ""
+    svg = _req("GET", f"/api/drawing.svg?sheet=A3&projection={projection}{q}")
     return Image(data=cairosvg.svg2png(bytestring=svg, output_width=1600), format="png")
 
 
@@ -144,7 +148,7 @@ def render_views(projection: str = "first", target: str = "auto") -> Image:
 @mcp.tool(description="Run one modelling command on the open part (validated; a rejected command leaves the model unchanged).\n"
           "Commands: new_part, create_plate, create_l_bracket, create_shaft, create_flange, set_variable(name, value, min, max), "
           "set_parameter(name, value), add_feature(id, type, params, after), add_hole(id, diameter|thread, positions, face|plane, depth, "
-          "cbore_diameter, cbore_depth, csk_diameter, csk_angle, thread_depth), add_pocket, update_feature(id, params), remove_feature(id), "
+          "cbore_diameter, cbore_depth, csk_diameter, csk_angle, thread_depth, or Hole Wizard standard=\"ISO\", type, size, fit), add_pocket, update_feature(id, params), remove_feature(id), "
           "suppress_feature(id, suppressed), assign_material(name, density, E, nu, yield_strength), set_name(name), "
           "record_design_intent(requirements, assumptions, open_questions), add_annotation(type, ...), remove_annotation(id), "
           "set_sheet_metal(thickness, bend_radius, k_factor), set_analysis_setup(supports, loads), "
@@ -195,12 +199,14 @@ def import_drawing(path: str) -> list[Image | str]:
 
 
 @mcp.tool()
-def export_file(kind: str, path: str, sheet: str = "A3", projection: str = "first") -> dict[str, Any]:
-    """Export the part. kind: step | stl | drawing (PDF or SVG by extension) | flat (sheet-metal flat pattern, DXF or SVG)."""
+def export_file(kind: str, path: str, sheet: str = "A3", projection: str = "first",
+                sections: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Export the part. kind: step | stl | drawing (PDF or SVG by extension) | flat (sheet-metal flat pattern, DXF or SVG).
+    Drawings may add hatched section views: sections=[{"plane": "XZ"|"YZ"|"XY", "offset": mm, "flip": bool}]."""
     if kind in ("step", "stl"):
         return _req("POST", f"/api/export/{kind}", {"path": path})
     if kind == "drawing":
-        return _req("POST", "/api/drawing/export", {"path": path, "sheet": sheet, "projection": projection})
+        return _req("POST", "/api/drawing/export", {"path": path, "sheet": sheet, "projection": projection, "sections": sections})
     if kind == "flat":
         return _req("POST", "/api/flat/export", {"path": path})
     raise RuntimeError("kind must be step, stl, drawing or flat")
@@ -243,10 +249,19 @@ def run_stress_analysis(supports: list[dict[str, Any]], loads: list[dict[str, An
 
 @mcp.tool()
 def assembly(command: str = "get", args: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Assembly workspace. command 'get' returns components, mates, solver status and BOM. Others:
+    """Assembly workspace. command 'get' returns components, mates, solver status, explode steps and BOM. Others:
     add_component(file, position, rotation, fixed), remove_component(id), set_transform(id, position, rotation),
-    set_fixed(id, fixed), add_mate(type coincident|distance|parallel|concentric, a {component, face {point, normal}},
-    b {...}, value, aligned), remove_mate(id), new, save(path), open(path), interference. Faces use component-local coordinates.
+    move_component(id, translate [dx,dy,dz], axis, angle deg, pivot?) for free components (mates re-solve),
+    set_fixed(id, fixed), set_visibility(ids id|[ids]|'*', hidden?, transparent?),
+    add_mate(type, a {component, face {point, normal}}, b {...}, value, aligned) with type
+      coincident|distance (value mm)|parallel|perpendicular|angle (value deg between normals, 0-180)|concentric|lock
+      (lock needs only {component}; it keeps the current relative pose),
+    edit_mate(id, value?, aligned?, suppressed?), flip_mate(id), remove_mate(id),
+    pattern_component(id, type linear|circular, count, direction, spacing | axis, point, angle),
+    add_explode_step(components, direction, distance), edit_explode_step(id, ...), remove_explode_step(id),
+    auto_explode(scale), clear_explode (exploded views are display offsets saved in the file),
+    new, save(path), open(path), interference, mass (mass, volume, centre of mass), bom_csv,
+    measure(refs [{kind face|edge|vertex, component, point (world)}]). Mate faces use component-local coordinates.
     Robots: import_urdf(path, out_dir?, geometry visual|collision) converts a URDF or xacro into parts plus an
     assembly and opens it; joints(values {joint: degrees or mm}) moves joints; set_joint(name, value) does it as an undo step."""
     if command == "get":
@@ -255,6 +270,12 @@ def assembly(command: str = "get", args: dict[str, Any] | None = None) -> dict[s
         m = _req("POST", f"/api/asm/{command}")
         if command == "interference":
             return m
+    elif command == "mass":
+        return _req("GET", "/api/asm/mass")
+    elif command == "bom_csv":
+        return {"csv": _req("GET", "/api/asm/bom.csv").decode()}
+    elif command == "measure":
+        return _req("POST", "/api/asm/measure", {"refs": (args or {}).get("refs", [])})
     elif command in ("save", "open"):
         m = _req("POST", f"/api/asm/{command}", {"path": (args or {}).get("path")})
     elif command == "import_urdf":

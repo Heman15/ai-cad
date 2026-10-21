@@ -45,6 +45,7 @@ export interface FaceEntity {
   center: number[]
   radius?: number
   axis_dir?: number[]
+  axis_point?: number[]
   hole_instance?: { index: number; count: number; position: number[]; diameter: number }
   component?: string
   local_point?: number[]
@@ -63,12 +64,15 @@ export interface EdgeEntity {
   radius?: number
   center?: number[]
   component?: string
+  local_point?: number[]
   polyline: number[]
 }
 
 export interface VertexEntity {
   index: number
   point: number[]
+  component?: string
+  local_point?: number[]
 }
 
 export interface Model {
@@ -243,7 +247,10 @@ export interface DrawingDimension {
 export const desktop: DesktopBridge | undefined = (window as unknown as { desktop?: DesktopBridge }).desktop
 
 export function refOf(e: FaceEntity | EdgeEntity | VertexEntity, kind: 'face' | 'edge' | 'vertex'): SelRef {
-  if (kind === 'vertex') return { kind, point: e.point, type: 'VERTEX', feature: null, index: e.index }
+  if (kind === 'vertex') {
+    const v = e as VertexEntity
+    return { kind, point: v.point, type: 'VERTEX', feature: v.component ?? null, index: v.index, component: v.component, local_point: v.local_point }
+  }
   const f0 = e as FaceEntity | EdgeEntity
   const base = { kind, point: f0.point, type: f0.type, feature: f0.feature, index: f0.index }
   if (kind === 'face') {
@@ -252,7 +259,7 @@ export function refOf(e: FaceEntity | EdgeEntity | VertexEntity, kind: 'face' | 
       component: f.component, local_point: f.local_point, local_normal: f.local_normal }
   }
   const g = e as EdgeEntity
-  return { ...base, length: g.length, radius: g.radius }
+  return { ...base, length: g.length, radius: g.radius, component: g.component, local_point: g.local_point }
 }
 
 export const fmt = (v: number | null | undefined, digits = 2) =>

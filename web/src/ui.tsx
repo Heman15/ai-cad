@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type RefObject } from 'react'
 import {
-  Box, CircleDot, CornerDownRight, FlipHorizontal2, Grid3x3, Layers, Monitor, Moon, Orbit, Package, PanelTop, PenLine,
-  Radius, RotateCw, Spline, Sun, Triangle, Waves, type LucideIcon,
+  Box, ChartSpline, ChevronDown, CircleDot, Cone, CornerDownRight, Cuboid, FilePlus, FlipHorizontal2, FolderOpen, FoldVertical, Grid3x3, Layers,
+  Maximize, Monitor, Moon, Orbit, Package, PanelTop, PenLine, Radius, Redo2, RotateCw, Save, SaveAll, Settings2, Spline, SquareDashed, Sun, Triangle,
+  TriangleRight, Undo2, Waves, type LucideIcon,
 } from 'lucide-react'
+import type { DisplayStyle, StdView, ViewportHandle } from './Viewport'
 
 export const FEATURE_ICONS: Record<string, LucideIcon> = {
   sketch: PenLine, extrude: Box, revolve: RotateCw, sweep: Spline, loft: Layers, hole: CircleDot,
   fillet: Radius, chamfer: Triangle, shell: Package, thread: Waves,
   pattern_linear: Grid3x3, pattern_circular: Orbit, mirror: FlipHorizontal2,
-  sheet_base: PanelTop, sheet_flange: CornerDownRight,
+  sheet_base: PanelTop, sheet_flange: CornerDownRight, sheet_hem: FoldVertical,
+  draft: Cone, rib: TriangleRight, variable_fillet: ChartSpline,
 }
 
 /** Small isometric cube with one face (or none, for isometric) highlighted. */
@@ -74,5 +77,88 @@ export function RibbonGroup({ label, children }: { label: string; children: Reac
       <div className="rbtns">{children}</div>
       <div className="rlabel">{label}</div>
     </div>
+  )
+}
+
+export const VIEW_NAMES: Record<StdView, string> = { iso: 'Isometric', front: 'Front', back: 'Back', top: 'Top', bottom: 'Bottom', right: 'Right', left: 'Left' }
+export const DISPLAY: [DisplayStyle, string, LucideIcon][] = [['shaded-edges', 'Shaded with edges', Box], ['shaded', 'Shaded', Cuboid], ['wireframe', 'Wireframe', SquareDashed]]
+
+/** Dark title bar shared by the Part and Assembly workspaces: brand, workspace switch, quick access, document title. */
+export function TitleBar({ modeSwitch, kind, title, unsaved, onNew, onOpen, onSave, onSaveAs, onUndo, onRedo, canSave, canUndo, canRedo, onSettings, children }: {
+  modeSwitch: React.ReactNode; kind: string; title: string; unsaved: boolean
+  onNew: () => void; onOpen: () => void; onSave: () => void; onSaveAs?: () => void; onUndo: () => void; onRedo: () => void
+  canSave: boolean; canUndo: boolean; canRedo: boolean; onSettings: () => void; children?: React.ReactNode
+}) {
+  return (
+    <header className="titlebar">
+      <span className="brand"><span className="logo"><Cuboid size={16} /></span>AI CAD</span>
+      {modeSwitch}
+      <div className="qa">
+        <button className="icon-btn" aria-label="New" title={`New ${kind.toLowerCase()}`} onClick={onNew}><FilePlus size={16} /></button>
+        <button className="icon-btn" aria-label="Open" title="Open (Ctrl+O)" onClick={onOpen}><FolderOpen size={16} /></button>
+        <button className="icon-btn" aria-label="Save" title="Save (Ctrl+S)" onClick={onSave} disabled={!canSave}><Save size={16} /></button>
+        {onSaveAs && <button className="icon-btn" aria-label="Save as" title="Save as (Ctrl+Shift+S)" onClick={onSaveAs} disabled={!canSave}><SaveAll size={16} /></button>}
+        <span className="qa-sep" />
+        <button className="icon-btn" aria-label="Undo" title="Undo (Ctrl+Z)" onClick={onUndo} disabled={!canUndo}><Undo2 size={16} /></button>
+        <button className="icon-btn" aria-label="Redo" title="Redo (Ctrl+Y)" onClick={onRedo} disabled={!canRedo}><Redo2 size={16} /></button>
+        {children}
+      </div>
+      <span className="doc-title">{title}{unsaved ? ' *' : ''}<span className="muted"> · {kind}</span></span>
+      <div className="qa qa-end">
+        <ThemeButton />
+        <button className="icon-btn" aria-label="AI settings" title="AI settings" onClick={onSettings}><Settings2 size={16} /></button>
+      </div>
+    </header>
+  )
+}
+
+/** Heads-up view toolbar over the viewport: fit, standard views, display style; workspace tools go in children. */
+export function ViewHud({ viewRef, display, setDisplay, children }: {
+  viewRef: RefObject<ViewportHandle | null>; display: DisplayStyle; setDisplay: (d: DisplayStyle) => void; children?: React.ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="hud" role="toolbar" aria-label="View">
+      <button className="icon-btn" aria-label="Fit" title="Zoom to fit (F)" onClick={() => viewRef.current?.fit()}><Maximize size={16} /></button>
+      {(['iso', 'front', 'top', 'right'] as StdView[]).map((v) => (
+        <button key={v} className="icon-btn" aria-label={VIEW_NAMES[v]} title={`${VIEW_NAMES[v]} view`} onClick={() => viewRef.current?.view(v)}><ViewIcon face={v} /></button>
+      ))}
+      <div className="menu-anchor">
+        <button className="icon-btn" aria-label="More views" title="Back, bottom, left" onClick={() => setOpen(!open)}><ChevronDown size={14} /></button>
+        {open && (
+          <div className="menu hud-menu" onMouseLeave={() => setOpen(false)}>
+            {(['back', 'bottom', 'left'] as StdView[]).map((v) => (
+              <button key={v} onClick={() => { viewRef.current?.view(v); setOpen(false) }}><ViewIcon face={v} /> {VIEW_NAMES[v]}</button>
+            ))}
+          </div>
+        )}
+      </div>
+      <span className="hud-sep" />
+      {DISPLAY.map(([d, label, Icon]) => (
+        <button key={d} className={`icon-btn ${display === d ? 'on' : ''}`} aria-label={label} title={label} aria-pressed={display === d} onClick={() => setDisplay(d)}><Icon size={16} /></button>
+      ))}
+      {children}
+    </div>
+  )
+}
+
+/** HUD toggle button (selection filters, measure, …). */
+export function HudButton({ icon: Icon, label, title, on, disabled, onClick }: {
+  icon: LucideIcon; label: string; title?: string; on?: boolean; disabled?: boolean; onClick: () => void
+}) {
+  return (
+    <button className={`icon-btn ${on ? 'on' : ''}`} aria-label={label} title={title ?? label} aria-pressed={!!on} disabled={disabled} onClick={onClick}><Icon size={16} /></button>
+  )
+}
+
+/** Bottom status bar: last message, a context hint, a readout, units. */
+export function StatusBar({ status, hint, readout }: { status: { ok: boolean; text: string } | null; hint: React.ReactNode; readout?: React.ReactNode }) {
+  return (
+    <footer className="statusbar">
+      {status ? <span className={`status ${status.ok ? 'ok' : 'err'}`} title={status.text}>{status.text}</span> : <span className="status muted">Ready</span>}
+      <span className="sb-mid muted">{hint}</span>
+      {readout && <span className="readout">{readout}</span>}
+      <span className="units" title="Units: millimetre, gram, second">MMGS</span>
+    </footer>
   )
 }

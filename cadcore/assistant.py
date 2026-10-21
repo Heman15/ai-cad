@@ -56,8 +56,13 @@ TOOLS = [
           {"refs": {"type": "array", "items": _REF, "minItems": 1, "maxItems": 2}}, ["refs"]),
     _tool("calculate_mass", "Mass from the solid's volume and the explicitly assigned material density.", {}, []),
     _tool("render_views", "Render the current solid as a technical drawing image (front/top/side hidden-line views, iso, "
-          "overall and hole dimensions) and look at it. Use it to check your work, and to compare against a source drawing.",
-          {"projection": {"type": "string", "enum": ["first", "third"]}}, []),
+          "overall and hole dimensions) and look at it. Use it to check your work, and to compare against a source drawing. "
+          "Optional hatched section views: sections=[{plane: XY|YZ|XZ, offset (mm on the plane's normal axis; default the "
+          "middle), flip, label}] add SECTION A-A … with the cutting-plane line on the view that sees the plane edge-on.",
+          {"projection": {"type": "string", "enum": ["first", "third"]},
+           "sections": {"type": "array", "items": {"type": "object", "properties": {
+               "plane": {"type": "string", "enum": ["XY", "YZ", "XZ"]}, "offset": _NUM, "flip": {"type": "boolean"},
+               "label": {"type": "string"}}, "required": ["plane"]}}}, []),
     # ---- modelling ----
     _tool("new_part", "Clear the model and start an empty part.", {"name": {"type": "string"}}, []),
     _tool("create_plate", "Template: replace the model with a parametric plate (variables length, width, thickness; "
@@ -94,7 +99,11 @@ TOOLS = [
            "depth": _NUM_OR_FORMULA, "cbore_diameter": _NUM_OR_FORMULA, "cbore_depth": _NUM_OR_FORMULA,
            "csk_diameter": _NUM_OR_FORMULA, "csk_angle": _NUM_OR_FORMULA,
            "thread": {"type": "string", "description": "Tapped hole, ISO metric e.g. 'M8' or 'M8x1'; diameter defaults to the tap drill"},
-           "thread_depth": _NUM_OR_FORMULA},
+           "thread_depth": _NUM_OR_FORMULA,
+           "standard": {"type": "string", "enum": ["ISO"], "description": "Hole Wizard: size the hole from ISO tables instead of diameter/cbore/csk/thread"},
+           "type": {"type": "string", "enum": ["clearance", "tapped", "counterbore", "countersink"]},
+           "size": {"type": "string", "description": "e.g. 'M6' (tapped also 'M8x1')"},
+           "fit": {"type": "string", "enum": ["close", "normal", "loose"]}},
           ["id", "positions"]),
     _tool("update_feature", "Set or add params on an existing feature (null removes a param).",
           {"id": {"type": "string"}, "params": {"type": "object"}}, ["id", "params"]),
@@ -136,7 +145,8 @@ TOOLS = [
     _tool("remove_annotation", "Remove an annotation by id.", {"id": {"type": "string"}}, ["id"]),
     # ---- sheet metal ----
     _tool("set_sheet_metal", "Make the part a sheet-metal part (or change its parameters). Then use add_feature with "
-          "sheet_base (profile -> flat base of the sheet thickness) and sheet_flange (bend + flange on a straight base edge). "
+          "sheet_base (profile -> flat base of the sheet thickness), sheet_flange (bend + flange on a straight base edge) and sheet_hem "
+          "(closed or open 180° hem on a base edge). "
           "Holes/through-cuts in the base appear in the flat pattern.",
           {"thickness": _NUM_OR_FORMULA, "bend_radius": _NUM_OR_FORMULA, "k_factor": _NUM}, ["thickness", "bend_radius"]),
     _tool("get_flat_pattern", "Unfold the sheet-metal part: flat size, area and bend list (or why it cannot be unfolded).", {}, []),
@@ -225,7 +235,7 @@ Engineering honesty:
 - A safety factor relates to the stated loads and the material's yield only. It is not a certification. Mention fatigue, buckling, impact or temperature when they could matter, since those are not analysed.
 - Manufacturability checks are rule-of-thumb screening, not a quote or approval.
 - Tolerances and GD&T are design decisions: add them only when the user asks or agrees.
-- Sheet-metal parts: use set_sheet_metal, sheet_base and sheet_flange, then check get_flat_pattern.
+- Sheet-metal parts: use set_sheet_metal, sheet_base, sheet_flange and sheet_hem, then check get_flat_pattern.
 - Assemblies are edited in the Assembly workspace, which has no AI tools yet. Tell the user how to do it there.
 
 Keep replies short: what changed (with values), what you assumed, and any question."""
@@ -368,7 +378,10 @@ class Assistant:
             if not p.result:
                 return {"ok": False, "message": "the model is empty", "data": {}}
             from .drawing import make_drawing, to_png
-            d = make_drawing(p.result, p.spec, "A3", args.get("projection", "first"))
+            try:
+                d = make_drawing(p.result, p.spec, "A3", args.get("projection", "first"), args.get("sections"))
+            except ValueError as e:
+                return {"ok": False, "message": str(e), "data": {}}
             import base64
             return {"ok": True, "message": f"rendered drawing, scale {d['scale']}", "data": {"warnings": d["warnings"]},
                     "image": base64.standard_b64encode(to_png(d["svg"], 1600)).decode()}

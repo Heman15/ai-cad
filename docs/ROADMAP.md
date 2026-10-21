@@ -132,3 +132,25 @@ Windows and macOS installers are not built. The code is portable, but the script
     - an Assistant tab in the Assembly workspace, with live sync.
   - **Verified end to end:** one chat message ("bring in the AiNex, raise its right arm, turn its head") made Claude Code find the repository, download 8 MB, import, pose and report the licence.
   - **Tests:** 87 unit/API tests and 6 UI suites pass.
+- **2026-10-21 (part features):** Closed the main SolidWorks part-modelling gaps:
+  - **Draft:** OCC `BRepOffsetAPI_DraftAngle` about a neutral plane (base plane or face) and a pull direction; ±45° limit; faces perpendicular to the pull, or that the kernel cannot taper, are named by position. A 40 × 40 × 20 block drafted 5° matches ∫(a − 2z·tan θ)² dz to 1e-9, and the measured face angle is 5.000°.
+  - **Rib:** from an open sketch line or points; parallel to the sketch (filled in the plane up to the part, ends extended along the line) or normal to it (grown along the normal to the part); both/one-sided thickness. It fails clearly when it doesn't reach material. An L-bracket gusset adds exactly ½·55·35·4 mm³.
+  - **Variable-radius fillet:** one edge, r1 → r2 plus optional intermediate radii (`BRepFilletAPI_MakeFillet` with a radius law); the end that gets r1 can be picked with a vertex. The measured radius at both ends and the middle matches to 0.01 mm.
+  - **Hole Wizard:** ISO 273 clearance (close/normal/loose), tapped (ISO 2306 tap drills, coarse and fine pitches, cosmetic thread), counterbore for ISO 4762 (DIN 974-1 Ø, head-height depth), and 90° countersink for ISO 10642. Unknown sizes are rejected. Drawing callouts name the screw standard.
+  - **Section views:** `sections` on `make_drawing`, `/api/drawing.*`, MCP `render_views`/`export_file` and the drawing dialog. Each is a full section on an XY/YZ/XZ plane (default through the middle) with 45° hatching of the cut faces (holes stay unhatched), a cutting-plane line with arrows and letters on the view that sees it edge-on, and placement that avoids the other views (the scale drops if needed).
+  - **Sheet-metal hems:** open (gap) and closed hems on base-flange edges, collision-checked, unfolded in the flat pattern with BA = π·(R + K·t).
+  - **Tests:** `test_features_more.py` (17), 104 unit/API tests pass. The Chrome UI suites weren't rerun for these dialogs yet.
+- **2026-10-21 (assembly):**
+  - **Assembly workspace, SolidWorks-style:** the same title bar, ribbon (Assembly, Evaluate, Import / Export), heads-up view toolbar, orientation triad and status bar as the Part workspace. These pieces are now shared components (`TitleBar`, `ViewHud`, `StatusBar` in `ui.tsx`). The FeatureManager tree shows components with fixed `(f)` / floating `(-)` prefixes, robot link names and hidden state, a Mates folder (select, edit, suppress, delete) and a Joints folder with the sliders. A PropertyManager tab hosts each command.
+  - **Mates:** angle, perpendicular and lock mates; alignment flip; editing values; suppress and unsuppress. Prealign turns faces off the solver's saddle points, about the component's other mate axes where possible. First placement now moves a component only along constrained directions, so free directions keep where it was put.
+  - **Components:**
+    - Move and Rotate Component: drag in the 3D view, nudge buttons, or numeric input. Free components only; mates re-solve.
+    - Linear and circular component patterns.
+    - Show/hide, isolate and transparency.
+  - **Exploded views:** steps (direction and distance) and auto-explode radially from the centre, saved in the `.aicadasm` file. They are drawn as display offsets, with an animated explode/collapse toggle.
+  - **Evaluate:**
+    - measure between faces, edges and vertices of components in world coordinates (`/api/asm/measure`);
+    - mass properties: mass from materials, or URDF link masses, plus centre of mass (`/api/asm/mass`);
+    - bill of materials with CSV export (`/api/asm/bom.csv`).
+  - **MCP:** the `assembly` tool documents the new mate types and commands, plus `mass`, `bom_csv` and `measure`.
+  - **Tests:** 95 unit/API tests pass, including 8 new solver tests that check solved poses numerically. The `ui_assembly`, `ui_urdf` and `ui_smoke` suites pass.
