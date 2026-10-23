@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run every check: unit/API tests, the five browser UI suites (Chrome), and the desktop self-test.
+# Run every check: unit/API tests, the browser UI suites (Chrome), and the desktop self-test.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 TMP=$(mktemp -d)
@@ -14,7 +14,7 @@ PORT=$(.venv/bin/python -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1
 .venv/bin/python -m uvicorn server.app:app --host 127.0.0.1 --port "$PORT" --log-level warning &
 SERVER=$!
 for _ in $(seq 60); do curl -s -o /dev/null "http://127.0.0.1:$PORT/api/info" && break; sleep 0.5; done
-for t in ui_smoke ui_sketch ui_drawing ui_analysis ui_assembly ui_urdf; do
+for t in ui_smoke ui_sketch ui_drawing ui_analysis ui_assembly ui_urdf ui_print; do
   echo "== $t"
   .venv/bin/python "tests/$t.py" "http://127.0.0.1:$PORT" "$TMP"
 done

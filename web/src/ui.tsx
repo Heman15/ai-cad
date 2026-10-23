@@ -2,7 +2,7 @@
 import { useEffect, useState, type RefObject } from 'react'
 import {
   Box, ChartSpline, ChevronDown, CircleDot, Cone, CornerDownRight, Cuboid, FilePlus, FlipHorizontal2, FolderOpen, FoldVertical, Grid3x3, Layers,
-  Maximize, Monitor, Moon, Orbit, Package, PanelTop, PenLine, Radius, Redo2, RotateCw, Save, SaveAll, Settings2, Spline, SquareDashed, Sun, Triangle,
+  Import, Maximize, Monitor, Moon, Orbit, Package, PanelTop, PenLine, Radius, Redo2, RotateCw, Save, SaveAll, Settings2, Spline, SquareDashed, Sun, Triangle,
   TriangleRight, Undo2, Waves, type LucideIcon,
 } from 'lucide-react'
 import type { DisplayStyle, StdView, ViewportHandle } from './Viewport'
@@ -12,7 +12,7 @@ export const FEATURE_ICONS: Record<string, LucideIcon> = {
   fillet: Radius, chamfer: Triangle, shell: Package, thread: Waves,
   pattern_linear: Grid3x3, pattern_circular: Orbit, mirror: FlipHorizontal2,
   sheet_base: PanelTop, sheet_flange: CornerDownRight, sheet_hem: FoldVertical,
-  draft: Cone, rib: TriangleRight, variable_fillet: ChartSpline,
+  draft: Cone, rib: TriangleRight, variable_fillet: ChartSpline, import_body: Import,
 }
 
 /** Small isometric cube with one face (or none, for isometric) highlighted. */

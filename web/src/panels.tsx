@@ -2,7 +2,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import { Dot, Eye, EyeOff, Trash2 } from 'lucide-react'
 import { FEATURE_ICONS } from './ui'
-import { api, fmt, type Feature, type Json, type Model, type SelRef } from './api'
+import { api, fmt, post, type Feature, type Json, type Model, type SelRef } from './api'
 
 export type Run = (command: string, args: Record<string, unknown>) => Promise<boolean>
 
@@ -161,12 +161,46 @@ export function FeatureProperties({ feature, model, run }: { feature: Feature; m
           {d.geometry && <>Depends on earlier geometry (face/edge references).</>}
         </p>
       )}
-      <div className="params">
-        {Object.entries(feature.params).map(([k, v]) => (
-          <ParamRows key={k} path={`${feature.id}.${k}`} value={v} model={model} run={run} />
-        ))}
-      </div>
+      {feature.type === 'import_body' ? <ImportedBody feature={feature} run={run} /> : (
+        <div className="params">
+          {Object.entries(feature.params).map(([k, v]) => (
+            <ParamRows key={k} path={`${feature.id}.${k}`} value={v} model={model} run={run} />
+          ))}
+        </div>
+      )}
     </section>
+  )
+}
+
+/** A body read from a mesh or CAD file: its source, units, and the option to rebuild a mesh as editable features. */
+function ImportedBody({ feature, run }: { feature: Feature; run: Run }) {
+  const file = String(feature.params.file ?? '')
+  const units = String(feature.params.units ?? 'mm')
+  const mesh = /\.(stl|obj|ply|off|3mf|glb|gltf|dae)$/i.test(file)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  return (
+    <div className="params">
+      <p className="small"><span className="muted">File</span> <span title={file}>{file.split('/').pop()}</span></p>
+      <p className="muted small">A fixed body: its shape comes from the file. Features after it (holes, cuts, fillets on flat faces) work as usual.</p>
+      {mesh && (
+        <div className="param-row"><span>Units of the file</span>
+          <select value={units} onChange={(e) => run('update_feature', { id: feature.id, params: { units: e.target.value } })}>
+            <option value="mm">millimetres</option><option value="cm">centimetres</option><option value="m">metres</option><option value="in">inches</option>
+          </select></div>
+      )}
+      {mesh && (
+        <button className="wide" disabled={busy} title="Fit sheet-metal or extruded features to the mesh, checked against it, and open the result as a new part"
+          onClick={async () => {
+            setBusy(true); setMsg(null)
+            try {
+              const r = await post<{ ok: boolean; message: string }>('/parts/rebuild', { path: file, scale: { mm: 1, cm: 10, m: 1000, in: 25.4 }[units] ?? 1 })
+              setMsg({ ok: r.ok, text: r.ok ? r.message : `Not rebuilt: ${r.message}` })
+            } catch (e) { setMsg({ ok: false, text: (e as Error).message }) } finally { setBusy(false) }
+          }}>{busy ? 'Rebuilding…' : 'Rebuild as editable part'}</button>
+      )}
+      {msg && <p className={`small ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</p>}
+    </div>
   )
 }
 

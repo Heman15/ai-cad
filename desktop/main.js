@@ -82,7 +82,7 @@ async function start() {
 
 async function runSelftest(out) {
   const report = await win.webContents.executeJavaScript(`({
-    workspace: !!document.querySelector('.app .toolbar'),
+    workspace: !!document.querySelector('.app .ribbon'),
     canvas: !!document.querySelector('.viewport canvas'),
     webglError: document.querySelector('.overlay.error')?.textContent ?? null,
     bridge: typeof window.desktop?.openProjectDialog === 'function',
@@ -94,9 +94,28 @@ async function runSelftest(out) {
 }
 
 const projectFilters = [{ name: 'AI CAD project', extensions: ['aicad', 'json'] }]
+const MESH = ['stl', 'obj', 'ply', 'off', '3mf', 'glb', 'gltf', 'dae']
+const CAD = ['step', 'stp', 'iges', 'igs', 'brep', 'brp']
+// Linux file dialogs match extensions case-sensitively: list upper case too (robot meshes are often .STL).
+const both = (exts) => exts.flatMap((e) => [e, e.toUpperCase()])
+const openFilters = [
+  { name: 'All supported files', extensions: both(['aicad', 'json', ...MESH, ...CAD]) },
+  { name: 'AI CAD project', extensions: ['aicad', 'json'] },
+  { name: 'Meshes (STL, OBJ, 3MF, PLY…)', extensions: both(MESH) },
+  { name: 'CAD (STEP, IGES, BREP)', extensions: both(CAD) },
+]
 
 ipcMain.handle('open-project', async () => {
-  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: projectFilters })
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: openFilters })
+  return r.canceled ? null : r.filePaths[0]
+})
+ipcMain.handle('open-files', async (_e, title, filters) => {
+  const r = await dialog.showOpenDialog(win, { title, properties: ['openFile', 'multiSelections'],
+    filters: (filters || []).map((f) => ({ ...f, extensions: both(f.extensions) })) })
+  return r.canceled ? null : r.filePaths
+})
+ipcMain.handle('choose-folder', async (_e, title) => {
+  const r = await dialog.showOpenDialog(win, { title, properties: ['openDirectory', 'createDirectory'] })
   return r.canceled ? null : r.filePaths[0]
 })
 ipcMain.handle('save-project', async (_e, defaultName) => {
@@ -104,13 +123,14 @@ ipcMain.handle('save-project', async (_e, defaultName) => {
   return r.canceled ? null : r.filePath
 })
 ipcMain.handle('save-export', async (_e, defaultName, ext) => {
-  const names = { step: 'STEP model', stl: 'STL mesh' }
+  const names = { step: 'STEP model', stl: 'STL mesh', gcode: 'G-code' }
   const r = await dialog.showSaveDialog(win, { defaultPath: defaultName, filters: [{ name: names[ext] || ext, extensions: [ext] }] })
   return r.canceled ? null : r.filePath
 })
 
 ipcMain.handle('open-file', async (_e, title, filters) => {
-  const r = await dialog.showOpenDialog(win, { title, properties: ['openFile'], filters })
+  const r = await dialog.showOpenDialog(win, { title, properties: ['openFile'],
+    filters: (filters || []).map((f) => ({ ...f, extensions: both(f.extensions) })) })
   return r.canceled ? null : r.filePaths[0]
 })
 ipcMain.handle('save-file', async (_e, defaultName, filters) => {

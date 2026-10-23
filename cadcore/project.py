@@ -279,6 +279,31 @@ class Project:
             spec.features.insert(idx + 1, f)
         return f"added {type} {id}"
 
+    def _cmd_import_file(self, spec, file, units="mm", id=None):
+        """Add a body read from a mesh or CAD file (STL/OBJ/PLY/3MF/STEP/IGES/BREP); it is not parametric."""
+        from .convert import ConvertError, kind_of, scale_of
+
+        path = Path(str(file)).expanduser()
+        try:
+            if kind_of(path) not in ("mesh", "cad"):
+                raise CommandError("import_file takes mesh or CAD files; open .aicad parts directly")
+            scale_of(units)
+        except ConvertError as e:
+            raise CommandError(str(e))
+        if not path.exists():
+            raise CommandError(f"file not found: {path}")
+        if id is None:
+            stem = re.sub(r"\W+", "_", path.stem).strip("_").lower() or "body"
+            id = stem if stem[0].isalpha() else f"body_{stem}"
+            n = 2
+            while spec.feature(id):
+                id, n = f"{stem}_{n}", n + 1
+        self._check_new_id(spec, id)
+        spec.features.append(Feature(id=id, type="import_body", params={"file": str(path.resolve()), "units": units}))
+        if spec.name in ("Part", "") and len(spec.features) == 1:
+            spec.name = path.stem
+        return f"imported {path.name} as {id} (a fixed body: later features can cut or add to it)"
+
     def _cmd_add_hole(self, spec, id, diameter=None, depth="through", face="top", plane=None, positions=None,
                       x=None, y=None, z=None, **extra):
         """Convenience wrapper: hole on a named face (top/bottom/front/back/left/right)."""

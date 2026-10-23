@@ -299,8 +299,6 @@ def get_from_github(url: str, path: str | None = None) -> dict[str, Any]:
     return _req("POST", "/api/github", {"url": url, "path": path})
 
 
-if __name__ == "__main__":
-    mcp.run("stdio")
 
 
 # ---------------- parts from meshes ----------------
@@ -328,3 +326,38 @@ def rebuild_part_from_mesh(path: str, body: int | None = None, scale: float = 1.
     The result is compared with the mesh and refused above 5% difference ("not convertible: <reason>").
     On success it is saved as <name>_rebuilt.aicad and opened in the app. body: index, largest first."""
     return _req("POST", "/api/parts/rebuild", {"path": path, "body": body, "scale": scale}, timeout=900)
+
+
+# ---------------- files and 3D printing ----------------
+
+@mcp.tool()
+def convert_to_stl(sources: list[str], out: str, units: str = "mm", quality: str = "normal") -> dict[str, Any]:
+    """Convert model files to STL: meshes (STL/OBJ/PLY/3MF/OFF/GLB/DAE), CAD (STEP/IGES/BREP), AI CAD parts (.aicad) and
+    assemblies (.aicadasm, written as one STL with every part in place). out: a .stl path for one source, or a folder.
+    units: unit of mesh inputs (mm, cm, m, in); quality: coarse, normal (0.02 mm) or fine (0.005 mm) for curved CAD faces."""
+    return _req("POST", "/api/convert/stl", {"sources": sources, "out": out, "units": units, "quality": quality}, timeout=900)
+
+
+@mcp.tool()
+def list_printers(query: str = "") -> dict[str, Any]:
+    """Search the 3D-printer library (about 1000 printers from 35 makers, from the PrusaSlicer profiles, plus the
+    user's custom printers) by words of the maker/model, e.g. "ender 3 v2" or "prusa mk4". Returns exact names for
+    slice_for_print, nozzle and bed size."""
+    return _req("GET", "/api/print/find?" + urllib.parse.urlencode({"query": query}))
+
+
+@mcp.tool()
+def slice_for_print(printer: str, quality: str | None = None, material: str | None = None, overrides: dict[str, Any] | None = None,
+                    path: str | None = None, out: str | None = None, units: str | None = None) -> dict[str, Any]:
+    """Slice the open part (or the model file at path) into G-code for a 3D printer with the PrusaSlicer engine. The model
+    is put on its largest flat face in the middle of the bed. quality and material may be partial profile names
+    ("0.20", "PETG"); defaults are the printer's standard quality and PLA. overrides take PrusaSlicer setting names, e.g.
+    {"fill_density": "20%", "perimeters": 3, "support_material": 1, "brim_width": 5, "temperature": 215}.
+    Returns print time, filament use, layers and the G-code path (copied to out if given). Ask the user which printer
+    they have if you don't know; never guess one."""
+    return _req("POST", "/api/print/slice_file", {"printer": printer, "quality": quality, "material": material, "overrides": overrides,
+                                                  "path": path, "out": out, "units": units}, timeout=1800)
+
+
+if __name__ == "__main__":
+    mcp.run("stdio")

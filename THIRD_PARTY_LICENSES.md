@@ -20,6 +20,7 @@ AI CAD is distributed under the GNU AGPL v3 (see `LICENSE`). It uses the followi
 | NetworkX | 3.7 | BSD-3-Clause | mesh hole repair (via trimesh); flange/bend graphs (mesh → part) |
 | Shapely (GEOS) | 2.2.0 | BSD-3-Clause (GEOS: LGPL-2.1) | 2D outlines when rebuilding parts from meshes |
 | fast-simplification | 0.2.0 | MIT | reducing very large meshes |
+| lxml | 6.1.3 | BSD-3-Clause | reading 3MF files (via trimesh) |
 | FastAPI | 0.146.0 | MIT | local HTTP API |
 | Uvicorn | 0.54.0 | BSD-3-Clause | HTTP server |
 | Pydantic | 2.14.1 | MIT | request validation |
@@ -31,5 +32,7 @@ AI CAD is distributed under the GNU AGPL v3 (see `LICENSE`). It uses the followi
 | three.js | 0.171.0 | MIT | 3D viewport |
 | Lucide (lucide-react) | 0.468.0 | ISC | interface icons |
 | Electron | 33.2.1 | MIT (bundles Chromium, BSD-style and others) | desktop shell |
+
+**PrusaSlicer** (AGPL-3.0-or-later, Prusa Research, based on Slic3r) is the slicing engine of the Print workspace, including its printer, print and filament profile bundles. It is not bundled: the app finds an installed copy (the distribution package, Flathub, or one unpacked by **Install engine** into `~/.local/share/ai-cad/slicer-root`) and runs it as a separate program through its command line. The `.deb` recommends the `prusa-slicer` package.
 
 The packaged desktop builds additionally include CPython from python-build-standalone (PSF licence and component licences). Full licence texts are shipped inside each package (`site-packages/*/LICENSE*`, `node_modules/*/LICENSE*`).

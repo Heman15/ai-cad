@@ -113,6 +113,12 @@ A part becomes sheet metal when `spec.sheet` (thickness, bend radius, K-factor) 
 - **Acceptance:** symmetric difference with the mesh by ray casting (OCC booleans are unreliable when the faces lie on each other); above 5% the part stays a mesh and the reason is reported.
 - **Parts package:** bodies grouped by shape (principal frame, surface distance, mirror detection), classified with evidence, written as BOM + per-part STEP/STL/drawing/flat pattern.
 
+### Files and 3D printing (`cadcore/convert.py`, `cadcore/slicer.py`, `server/printing.py`)
+- **Reading files:** `convert.load_mesh` gives triangles in mm for any supported file (meshes as they are, CAD tessellated at a chosen accuracy, assemblies with every component placed); `convert.load_shape` gives an OCC shape (meshes via the URDF mesh-to-solid code). The `import_body` feature caches shapes by file, modification time and scale.
+- **Slicing engine:** PrusaSlicer, run as a separate program (`--export-gcode --load <flat config> --dont-arrange`). The app never links to it; it only reads its profile bundles and writes one flat `.ini` per slice: printer, then quality, then material, then the user's overrides.
+- **Plate:** the server keeps the meshes (centred on their own origin); the UI keeps each copy's 3x3 matrix and bed position and sends them with every slice, so the sliced placement is exactly the displayed one. Objects are written as STL in bed coordinates, resting on z = 0.
+- **Jobs:** slicing and engine installation run in background threads; the UI polls `/api/print/jobs/<id>`. The preview reads toolpaths from the G-code (`;TYPE:` and `;LAYER_CHANGE` comments, G2/G3 arcs split into chords) and receives them as one binary buffer; the viewer draws all layers below the current one as thin lines and the current one wide.
+
 ### Known architectural limits
 - Topological naming uses geometric signatures, not OCC history. A reference survives changes that keep its face or edge in place, and is reported missing otherwise.
 - The local HTTP API has no authentication. It listens only on 127.0.0.1, but any local process could call it.

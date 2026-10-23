@@ -7,5 +7,7 @@ contextBridge.exposeInMainWorld('desktop', {
   saveProjectDialog: (defaultName) => ipcRenderer.invoke('save-project', defaultName),
   saveExportDialog: (defaultName, ext) => ipcRenderer.invoke('save-export', defaultName, ext),
   openFileDialog: (title, filters) => ipcRenderer.invoke('open-file', title, filters),
+  openFilesDialog: (title, filters) => ipcRenderer.invoke('open-files', title, filters),
+  chooseFolderDialog: (title) => ipcRenderer.invoke('choose-folder', title),
   saveFileDialog: (defaultName, filters) => ipcRenderer.invoke('save-file', defaultName, filters),
 })

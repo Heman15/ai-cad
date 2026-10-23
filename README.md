@@ -21,6 +21,9 @@ Describe a part or drop in a drawing. The assistant asks for whatever it needs, 
 | **Assemblies** | Parts linked by file, mates (coincident, distance, parallel, concentric), interference check, bill of materials, STEP export |
 | **Robots (URDF)** | Import URDF or xacro: box/cylinder/sphere links become editable parts, STL/OBJ/DAE meshes become solids (flat faces recovered), joints become sliders with limits and mimic joints; export the posed robot to STEP |
 | **Mesh → parts** | Rebuild meshes as editable parts: sheet metal (thickness, flanges, bends, holes and slots as variables) or extrusions, accepted only within 5% of the mesh. A parts package for a whole robot groups identical and mirror-image parts and writes a BOM, STEP/STL, drawings and flat-pattern DXFs |
+| **Open any 3D file** | STL, OBJ, PLY, 3MF, STEP, IGES and BREP open as a part (a fixed body you can cut holes in or add to), or insert into a part or an assembly. Meshes in metres or inches are rescaled with a units setting |
+| **Convert to STL** | Any of those formats, AI CAD parts and whole assemblies (every part in place) to STL, one file or a batch; binary or ASCII; three accuracy levels for curved CAD faces |
+| **3D printing (Cura-style)** | A Print workspace: about 1000 printers from 35 makers (Creality, Prusa, Voron, Anycubic, Elegoo, QIDI, Sovol…) or your own custom printer; their materials and quality profiles; infill, supports, adhesion, walls, temperatures, speeds and every other slicer setting; models placed, rotated, scaled, mirrored, laid flat (automatically or on a face you click) and arranged on the bed; slicing to G-code with time and filament estimates; a layer-by-layer toolpath preview; save to SD card or send to OctoPrint, Klipper (Moonraker) or PrusaLink |
 | **Desktop app** | SolidWorks-style ribbon, FeatureManager tree, heads-up view toolbar, light and dark themes. Runs locally (Electron + Python); projects are plain JSON; STEP/STL export |
 
 | Constraint sketcher | Drawing → CAD, traceable |
@@ -47,6 +50,8 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt -r require
 ```
 
 If your system lacks `python3.12-venv`, use `python3.12 -m venv --without-pip .venv` and then `curl -sSL https://bootstrap.pypa.io/get-pip.py | .venv/bin/python`.
+
+**3D printing** needs the PrusaSlicer engine (AGPL-3.0; the app runs it as a separate program): `sudo apt install prusa-slicer`, or `flatpak install flathub com.prusa3d.PrusaSlicer`. Without admin rights, **Install engine** in the Print workspace unpacks Ubuntu/Debian's package for your user only.
 
 **Self-contained packages:** `packaging/build_linux.sh` builds an AppImage and a `.deb` that include their own Python runtime. Windows and macOS builds aren't scripted yet.
 
@@ -76,6 +81,8 @@ You can also drive the app **from Claude Code itself**: run `scripts/setup-claud
   - Hole Wizard standards other than ISO metric (no ANSI inch, pipe threads or ISO 7380/7046 heads);
   - sheet-metal flanges on flanges, and hems on flanges (hems attach to base-flange edges only); closed hems keep a 0.02 mm gap;
   - assemblies have no motion study or dynamics (URDF joints can be posed, not simulated); meshes imported from URDF aren't parametric;
+  - 3D printing is FDM only (no resin/SLA), single extruder (no multi-material or tool changers), without per-object settings, modifiers, paint-on supports or seams, and without variable layer height; G-code thumbnails for printer screens are not generated;
+  - imported STL/STEP bodies are fixed shapes, not feature trees (for sheet metal and extrusions, **Rebuild as editable part** turns a mesh into features);
   - section views are full sections on the XY/YZ/XZ planes (no offset/aligned/half sections or detail views) and are not dimensioned.
 - **Status:** see [docs/ROADMAP.md](docs/ROADMAP.md) for what's verified, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it works.
 
