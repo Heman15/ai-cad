@@ -29,10 +29,11 @@ from cadcore.materials import MATERIALS
 from cadcore.annotations import evaluate_annotations
 from cadcore.mesh import describe, measure, resolve
 
-from . import config
+from . import config, printing
 
 log = logging.getLogger("ai_cad")
 app = FastAPI(title="AI CAD")
+app.include_router(printing.router)
 LOCK = threading.RLock()
 
 
@@ -144,8 +145,8 @@ def assistant() -> Assistant:
     if S.assistant is None:
         S.assistant = Assistant(S.project, client_factory=_client)
         S.assistant.lock = LOCK
-        S.assistant.extra_tools = {**_robot_tools(), **_parts_tools()}
-        S.assistant.extra_prompt = ROBOT_PROMPT + PARTS_PROMPT
+        S.assistant.extra_tools = {**_robot_tools(), **_parts_tools(), **_print_tools()}
+        S.assistant.extra_prompt = ROBOT_PROMPT + PARTS_PROMPT + PRINT_PROMPT
     S.assistant.project = S.project
     if S.assistant.provider != c["provider"]:
         S.assistant.reset()  # message formats differ between providers
@@ -417,18 +418,126 @@ def save_to(body: PathIn):
     return {"ok": True, "path": str(path), "model": snapshot()}
 
 
+class OpenIn(BaseModel):
+    path: str
+    units: str | None = None  # meshes only: mm (default), cm, m, in
+
+
 @app.post("/api/project/open")
-def open_from(body: PathIn):
+def open_from(body: OpenIn):
+    """Open an AI CAD part, or any mesh/CAD file (STL, OBJ, PLY, 3MF, STEP, IGES, BREP) as a new part."""
+    from cadcore.convert import MESH_EXT, CAD_EXT
+
     path = Path(body.path).expanduser()
+    if not path.exists():
+        raise HTTPException(404, f"file not found: {path}")
+    if path.suffix.lower() in MESH_EXT | CAD_EXT:
+        project = Project()
+        r = project.execute("import_file", file=str(path), units=body.units or "mm")
+        if not r.ok:
+            raise HTTPException(400, r.message)
+        project._undo.clear()  # the import is the starting point, not an undoable step
+        with LOCK:
+            _replace_project(project, None)  # saving writes a new .aicad next to nothing: Save As asks
+        return {"model": snapshot(), "result": r.to_dict()}
     try:
         project = Project.load(path)
-    except FileNotFoundError:
-        raise HTTPException(404, f"file not found: {path}")
     except Exception as e:
         raise HTTPException(400, f"could not open {path.name}: {e}")
     with LOCK:
         _replace_project(project, str(path))
     return {"model": snapshot()}
+
+
+class ImportUploadIn(BaseModel):
+    filename: str
+    data: str  # base64
+    units: str | None = None
+
+
+@app.post("/api/project/import_upload")
+def import_upload(body: ImportUploadIn):
+    """Browser version of opening a mesh/CAD file: the bytes are kept in the cache folder the part refers to."""
+    import base64
+    import hashlib
+    import os
+
+    raw = base64.b64decode(body.data)
+    if len(raw) > 300 * 1024 * 1024:
+        raise HTTPException(413, "file too large (max 300 MB)")
+    d = Path(os.environ.get("AI_CAD_CACHE", Path.home() / ".cache" / "ai-cad")) / "imports" / hashlib.sha256(raw).hexdigest()[:16]
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / (Path(body.filename).name or "model.stl")
+    f.write_bytes(raw)
+    return open_from(OpenIn(path=str(f), units=body.units))
+
+
+class ConvertIn(BaseModel):
+    sources: list[str]
+    out: str  # a .stl file for one source, or a folder
+    units: str | None = None
+    quality: str = "normal"
+    binary: bool = True
+
+
+@app.post("/api/convert/stl")
+def convert_stl(body: ConvertIn):
+    from cadcore.convert import ConvertError, to_stl, to_stl_many
+
+    if not body.sources:
+        raise HTTPException(400, "choose at least one file to convert")
+    try:
+        if len(body.sources) == 1 and Path(body.out).suffix.lower() == ".stl":
+            return to_stl(body.sources[0], body.out, units=body.units, quality=body.quality, binary=body.binary)
+        return to_stl_many(body.sources, body.out, units=body.units, quality=body.quality, binary=body.binary)
+    except ConvertError as e:
+        raise HTTPException(400, str(e))
+
+
+def _part_stl() -> Path:
+    import re
+
+    with LOCK:
+        if not S.project.result:
+            raise HTTPException(400, "the open part has no solid to print")
+        path = printing.tmp_stl()
+        r = S.project.execute("export_stl", path=path, tolerance=0.01)
+        name = S.project.spec.name or "part"
+    if not r.ok:
+        raise HTTPException(400, r.message)
+    return path.rename(path.with_name(f"{re.sub(r'[^\w.-]+', '_', name)}_{path.stem[-6:]}.stl"))
+
+
+class SliceFileIn(BaseModel):
+    printer: str
+    quality: str | None = None
+    material: str | None = None
+    overrides: dict[str, Any] | None = None
+    path: str | None = None  # default: the open part
+    out: str | None = None
+    units: str | None = None
+
+
+@app.post("/api/print/slice_file")
+def print_slice_file(body: SliceFileIn):
+    """One call for assistants: slice the open part or a file with a named printer/quality/material."""
+    stl = None if body.path else _part_stl()
+    return printing.slice_file(body.path, body.printer, body.quality, body.material, body.overrides, body.out, body.units, part_stl=stl)
+
+
+@app.get("/api/print/find")
+def print_find(query: str = ""):
+    hits = printing.find_printers(query)
+    return {"printers": hits, "count": len(hits)}
+
+
+@app.post("/api/print/objects/from_part")
+def print_from_part():
+    """Put the open part on the print plate."""
+    p = _part_stl()
+    with LOCK:
+        name = S.project.spec.name or "part"
+    return printing.add_object(p, None, name=name)
 
 
 @app.get("/api/export/{fmt}")
@@ -1000,6 +1109,45 @@ def parts_rebuild(body: RebuildIn):
         with LOCK:
             _replace_project(rb["project"], str(part))
     return out
+
+
+PRINT_PROMPT = """
+
+Files and 3D printing:
+- import_file (a modelling command) adds a body from STL/OBJ/PLY/3MF/STEP/IGES; it is a fixed body, later features can cut it.
+- convert_to_stl converts any model file (mesh, STEP, IGES, .aicad part, .aicadasm assembly) to STL.
+- To print: list_printers(query) finds the exact printer name; slice_for_print(printer, quality, material, overrides) slices the
+  open part (or a file) into G-code with the PrusaSlicer engine and reports print time and filament. Ask which printer the user
+  has if you don't know; never guess one. Overrides use PrusaSlicer setting names (fill_density "20%", perimeters 3,
+  support_material 1, brim_width 5, temperature 215, bed_temperature 60)."""
+
+
+def _print_tools() -> dict[str, tuple[dict[str, Any], Any]]:
+    def conv(args):
+        return convert_stl(ConvertIn(**args))
+
+    def find(args):
+        hits = print_find(args.get("query", ""))["printers"]
+        return {"ok": True, "printers": hits, "message": f"{len(hits)} printers" + (" (first 40)" if len(hits) == 40 else "")}
+
+    def sl(args):
+        return print_slice_file(SliceFileIn(**args))
+
+    return {
+        "convert_to_stl": (_tool_schema("convert_to_stl", "Convert model files (STL/OBJ/PLY/3MF/STEP/IGES/BREP, .aicad parts, .aicadasm "
+                                        "assemblies) to STL. out is a .stl path for one file or a folder for several.",
+                                        {"sources": {"type": "array", "items": {"type": "string"}}, "out": {"type": "string"},
+                                         "units": {"type": "string", "enum": ["mm", "cm", "m", "in"], "description": "units of mesh files (default mm)"},
+                                         "quality": {"type": "string", "enum": ["coarse", "normal", "fine"]}}, ["sources", "out"]), conv),
+        "list_printers": (_tool_schema("list_printers", "Search the 3D printer profiles (about 1000 printers from 35 makers) by words in the "
+                                       "maker/model name, e.g. 'ender 3 v2' or 'prusa mk4'.", {"query": {"type": "string"}}, []), find),
+        "slice_for_print": (_tool_schema("slice_for_print", "Slice the open part (or the file at path) into G-code for a 3D printer, placed on "
+                                         "its most stable face in the middle of the bed. quality/material may be partial names; defaults are the "
+                                         "printer's standard quality and PLA. Returns print time, filament and the G-code path.",
+                                         {"printer": {"type": "string"}, "quality": {"type": "string"}, "material": {"type": "string"},
+                                          "overrides": {"type": "object"}, "path": {"type": "string"}, "out": {"type": "string"},
+                                          "units": {"type": "string", "enum": ["mm", "cm", "m", "in"]}}, ["printer"]), sl),
+    }
 
 
 def _parts_tools() -> dict[str, tuple[dict[str, Any], Any]]:

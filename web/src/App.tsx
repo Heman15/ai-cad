@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, desktop, type Model, type Overlay, type SelRef, type Settings } from './api'
+import { api, desktop, fileBase64, MESH_EXT, CAD_EXT, type Model, type Overlay, type SelRef, type Settings } from './api'
 import Chat, { type ChatTrigger } from './Chat'
 import { DrawingDialog, FlatPatternDialog, SourceDrawingPanel } from './Drawings'
 import ErrorBoundary from './ErrorBoundary'
@@ -8,6 +8,8 @@ import FeatureDialog, { DIALOGS, type DialogKind } from './FeatureDialog'
 import { FeatureProperties, FeatureTree, IntentPanel, MaterialPanel, SelectionPanel, Variables } from './panels'
 import AnalysisPanel from './Analysis'
 import AssemblyWorkspace from './Assembly'
+import ConvertDialog from './Convert'
+import PrintWorkspace from './Print'
 import AnnotationsPanel from './Annotations'
 import SettingsDialog from './Settings'
 import SketchEditor from './SketchEditor'
@@ -15,25 +17,35 @@ import Viewport, { type DisplayStyle, type MeasureGraphic, type PickMode, type V
 import MeasurePanel from './Measure'
 import { HudButton, RibbonButton, RibbonGroup, StatusBar, TitleBar, ViewHud } from './ui'
 import {
-  Box, ChartSpline, CircleDot, Cone, CornerDownRight, Cuboid, Download, Drill, Factory, FileImage, FileText, FlipHorizontal2, FoldVertical, Gauge,
+  Box, ChartSpline, CircleDot, FolderInput, Import, Cone, CornerDownRight, Cuboid, Download, Drill, Factory, FileImage, FileText, FlipHorizontal2, FoldVertical, Gauge,
   Grid3x3, Layers, LayoutTemplate, Minus, MousePointer2, Orbit, Package, PanelTop, PenLine, PenTool, Radius, RotateCw, Ruler, Scale3d, Scan,
-  SlidersHorizontal, Sparkles, Spline, Square, SquareMinus, Triangle, TriangleRight, Waves, Weight,
+  Printer, Repeat, SlidersHorizontal, Sparkles, Spline, Square, SquareMinus, Triangle, TriangleRight, Waves, Weight,
   type LucideIcon,
 } from 'lucide-react'
 
 export default function App() {
-  const [workspace, setWorkspace] = useState<'part' | 'assembly'>('part')
+  const [workspace, setWorkspace] = useState<'part' | 'assembly' | 'print'>('part')
+  const [aiSettings, setAiSettings] = useState<Settings | null>(null)
   const modeSwitch = (
     <div className="group seg">
       <button className={workspace === 'part' ? 'on' : ''} onClick={() => setWorkspace('part')}>Part</button>
       <button className={workspace === 'assembly' ? 'on' : ''} onClick={() => setWorkspace('assembly')}>Assembly</button>
+      <button className={workspace === 'print' ? 'on' : ''} onClick={() => setWorkspace('print')}>Print</button>
     </div>
   )
   if (workspace === 'assembly') return <AssemblyWorkspace modeSwitch={modeSwitch} />
-  return <PartWorkspace modeSwitch={modeSwitch} />
+  if (workspace === 'print') return (
+    <>
+      <PrintWorkspace modeSwitch={modeSwitch} onSettings={() => api.settings().then(setAiSettings).catch(() => {})} />
+      {aiSettings && <SettingsDialog settings={aiSettings} onSaved={setAiSettings} onClose={() => setAiSettings(null)} />}
+    </>
+  )
+  return <PartWorkspace modeSwitch={modeSwitch} onPrint={() => setWorkspace('print')} />
 }
 
-function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
+const IMPORT_EXT = [...MESH_EXT, ...CAD_EXT]
+
+function PartWorkspace({ modeSwitch, onPrint }: { modeSwitch: React.ReactNode; onPrint: () => void }) {
   const [model, setModelState] = useState<Model | null>(null)
   const [materials, setMaterials] = useState<Record<string, number>>({})
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -49,6 +61,7 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
   const [chatTrigger, setChatTrigger] = useState<ChatTrigger | null>(null)
   const [showDrawing, setShowDrawing] = useState(false)
   const [showFlat, setShowFlat] = useState(false)
+  const [showConvert, setShowConvert] = useState(false)
   const drawingInput = useRef<HTMLInputElement>(null)
   const [rtab, setRtab] = useState<RTab>('features')
   const [display, setDisplay] = useState<DisplayStyle>('shaded-edges')
@@ -140,14 +153,28 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
     }
   }, [model, setModel])
 
+  // Opens an AI CAD part, or a mesh/CAD file as a new part with one imported body.
+  const opened = useCallback(async (r: { model: Model; result?: { ok: boolean; message: string } }, name: string) => {
+    await setModel(r.model)
+    const big = r.model.bbox_mm ? Math.max(...r.model.bbox_mm) : 1
+    const hint = r.result && big < 2 ? ' · very small: if the file is in metres or inches, change the body\'s units in Properties' : ''
+    setStatus({ ok: true, text: r.result ? `${r.result.message}${hint}` : `opened ${name}` })
+  }, [setModel])
   const open = useCallback(async () => {
     if (desktop) {
       const path = await desktop.openProjectDialog()
       if (!path) return
-      if (await apply(api.openFrom(path))) setStatus({ ok: true, text: `opened ${path}` })
+      try { await opened(await api.openFrom(path), path) } catch (e) { setStatus({ ok: false, text: (e as Error).message }) }
     } else fileRef.current?.click()
     setSelection([])
-  }, [apply])
+  }, [opened])
+
+  const sendToPrint = useCallback(async () => {
+    try {
+      await api.toPrint()
+      onPrint()
+    } catch (e) { setStatus({ ok: false, text: (e as Error).message }) }
+  }, [onPrint])
 
   const exportFile = useCallback(async (fmt: 'step' | 'stl') => {
     if (!model?.entities) return
@@ -164,6 +191,12 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
       Object.assign(document.createElement('a'), { href: `/api/export/${fmt}`, download: '' }).click()
     }
   }, [model])
+
+  const insertBody = useCallback(async () => {
+    const path = desktop ? await desktop.openFileDialog('Insert a body from a file', [{ name: 'Meshes and CAD files', extensions: IMPORT_EXT }])
+      : window.prompt('Path of the STL/STEP/… file on this computer')
+    if (path) run('import_file', { file: path })
+  }, [run])
 
   const importDrawing = useCallback(async (file: File) => {
     const types: Record<string, string> = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' }
@@ -236,11 +269,16 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
       <TitleBar modeSwitch={modeSwitch} kind="Part" title={model?.spec.name || 'Untitled'} unsaved={!model?.path}
         onNew={() => { apply(api.newProject()); setSelection([]) }} onOpen={open} onSave={() => save(false)} onSaveAs={() => save(true)}
         onUndo={undo} onRedo={redo} canSave={!!model} canUndo={!!model?.can_undo} canRedo={!!model?.can_redo} onSettings={() => setShowSettings(true)}>
-        <input ref={fileRef} type="file" accept=".aicad,.json" hidden onChange={async (e) => {
+        <input ref={fileRef} type="file" accept={['.aicad', '.json', ...IMPORT_EXT.map((x) => `.${x}`)].join(',')} hidden onChange={async (e) => {
           const f = e.target.files?.[0]
           e.target.value = ''
           if (!f) return
-          try { await apply(api.uploadProject(JSON.parse(await f.text()))); setStatus({ ok: true, text: `opened ${f.name}` }) }
+          try {
+            if (IMPORT_EXT.includes(f.name.split('.').pop()?.toLowerCase() ?? '')) {
+              setStatus({ ok: true, text: `reading ${f.name}…` })
+              await opened(await api.importUpload(f.name, await fileBase64(f)), f.name)
+            } else { await apply(api.uploadProject(JSON.parse(await f.text()))); setStatus({ ok: true, text: `opened ${f.name}` }) }
+          }
           catch (err) { setStatus({ ok: false, text: `could not open ${f.name}: ${(err as Error).message}` }) }
         }} />
       </TitleBar>
@@ -303,9 +341,17 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
               <RibbonButton icon={FileImage} label="Import Drawing" title="Import a PDF or image drawing and turn it into CAD" onClick={() => drawingInput.current?.click()} />
               <RibbonButton icon={FileText} label="2D Drawing" title="Generate a dimensioned 2D drawing" disabled={!hasSolid} onClick={() => setShowDrawing(true)} />
             </RibbonGroup>
+            <RibbonGroup label="Import">
+              <RibbonButton icon={FolderInput} label="Open 3D File" title="Open STL, OBJ, 3MF, PLY, STEP, IGES or BREP as a part" onClick={open} />
+              <RibbonButton icon={Import} label="Insert Body" title="Add a body from a mesh or CAD file to this part (cut or add to it afterwards)" onClick={insertBody} />
+            </RibbonGroup>
             <RibbonGroup label="Export">
               <RibbonButton icon={Download} label="Export STEP" disabled={!hasSolid} onClick={() => exportFile('step')} />
               <RibbonButton icon={Download} label="Export STL" disabled={!hasSolid} onClick={() => exportFile('stl')} />
+              <RibbonButton icon={Repeat} label="Convert to STL" title="Convert any STEP, IGES, OBJ, 3MF, part or assembly file to STL" onClick={() => setShowConvert(true)} />
+            </RibbonGroup>
+            <RibbonGroup label="3D Printing">
+              <RibbonButton icon={Printer} label="3D Print" title="Slice this part for a 3D printer (printer, material, quality, G-code)" disabled={!hasSolid} onClick={sendToPrint} />
             </RibbonGroup>
           </>}
           <input ref={drawingInput} type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" hidden
@@ -401,6 +447,7 @@ function PartWorkspace({ modeSwitch }: { modeSwitch: React.ReactNode }) {
           {model.mass_kg !== null && ` · ${(model.mass_kg * 1000).toFixed(2)} g`}
         </>} />
 
+      {showConvert && <ConvertDialog onClose={() => setShowConvert(false)} setStatus={setStatus} partName={model?.spec.name ?? ''} hasPart={hasSolid} />}
       {showFlat && model && <FlatPatternDialog model={model} onClose={() => setShowFlat(false)} setStatus={setStatus} />}
       {showDrawing && model && <DrawingDialog model={model} onClose={() => setShowDrawing(false)} setStatus={setStatus} />}
       {dialog && <FeatureDialog kind={dialog} model={model} selection={selection} run={run} onClose={() => setDialog(null)} />}

@@ -155,8 +155,29 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T
 }
 
-const post = <T,>(path: string, body?: unknown) =>
+export const post = <T,>(path: string, body?: unknown) =>
   call<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
+
+export const get = <T,>(path: string) => call<T>(path)
+export const del = <T,>(path: string) => call<T>(path, { method: 'DELETE' })
+
+/** File contents as base64 (for uploads in the browser version). */
+export async function fileBase64(file: File): Promise<string> {
+  const buf = new Uint8Array(await file.arrayBuffer())
+  let bin = ''
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000))
+  return btoa(bin)
+}
+
+/** File types the app opens: its own parts, meshes and CAD exchange formats. */
+export const MESH_EXT = ['stl', 'obj', 'ply', 'off', '3mf', 'glb', 'gltf', 'dae']
+export const CAD_EXT = ['step', 'stp', 'iges', 'igs', 'brep', 'brp']
+export const MODEL_FILTERS = [
+  { name: 'All 3D files', extensions: [...MESH_EXT, ...CAD_EXT, 'aicad', 'aicadasm'] },
+  { name: 'Meshes (STL, OBJ, 3MF, PLY…)', extensions: MESH_EXT },
+  { name: 'CAD (STEP, IGES, BREP)', extensions: CAD_EXT },
+  { name: 'AI CAD part or assembly', extensions: ['aicad', 'json', 'aicadasm'] },
+]
 
 type WithModel = { result: CommandResult; model: Model }
 
@@ -172,7 +193,12 @@ export const api = {
   projectJson: () => call<unknown>('/project'),
   uploadProject: (spec: unknown) => post<{ model: Model }>('/project', spec),
   saveTo: (path: string) => post<{ ok: boolean; path: string; model: Model }>('/project/save', { path }),
-  openFrom: (path: string) => post<{ model: Model }>('/project/open', { path }),
+  openFrom: (path: string, units?: string) => post<{ model: Model; result?: CommandResult }>('/project/open', { path, units }),
+  importUpload: (filename: string, data: string, units?: string) =>
+    post<{ model: Model; result?: CommandResult }>('/project/import_upload', { filename, data, units }),
+  toPrint: () => post<{ id: string; name: string }>('/print/objects/from_part'),
+  convertStl: (sources: string[], out: string, opts: { units?: string; quality?: string; binary?: boolean }) =>
+    post<{ ok: boolean; message: string; failed?: { source: string; error: string }[] }>('/convert/stl', { sources, out, ...opts }),
   exportTo: (fmt: 'step' | 'stl', path: string) => post<CommandResult>(`/export/${fmt}`, { path }),
   resolve: (refs: SelRef[]) => post<{ items: (Partial<SelRef> & { status: string; reason?: string })[] }>('/resolve', { refs }),
   measure: (refs: SelRef[]) => post<Record<string, Json> & { ok: boolean; message?: string }>('/measure', { refs }),
@@ -225,6 +251,8 @@ export interface DesktopBridge {
   saveProjectDialog(defaultName: string): Promise<string | null>
   saveExportDialog(defaultName: string, ext: string): Promise<string | null>
   openFileDialog(title: string, filters: { name: string; extensions: string[] }[]): Promise<string | null>
+  openFilesDialog?(title: string, filters: { name: string; extensions: string[] }[]): Promise<string[] | null>
+  chooseFolderDialog?(title: string): Promise<string | null>
   saveFileDialog(defaultName: string, filters: { name: string; extensions: string[] }[]): Promise<string | null>
 }
 

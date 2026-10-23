@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 import cadquery as cq
@@ -1190,7 +1191,44 @@ def _f_sheet_hem(ctx: _Ctx, p: dict) -> tuple[str, cq.Shape]:
     return "add", fl.body
 
 
+_IMPORTED: dict[tuple[str, int, float], cq.Shape] = {}
+
+
+def _f_import_body(ctx: _Ctx, p: dict) -> tuple[str, cq.Shape]:
+    """A body read from a file (STL/OBJ/PLY/3MF/STEP/IGES/BREP). Not parametric: later features can cut or add
+    to it, but its own shape only changes if the file does."""
+    from .convert import ConvertError, kind_of, load_shape, scale_of
+
+    path = Path(str(p.get("file") or "")).expanduser()
+    if not str(p.get("file") or ""):
+        raise BuildError(f"{ctx.fid}: import_body needs a file")
+    try:
+        kind_of(path)
+        scale = scale_of(p.get("units", "mm"))
+    except ConvertError as e:
+        raise BuildError(f"{ctx.fid}: {e}")
+    if not path.exists():
+        raise BuildError(f"{ctx.fid}: imported file not found: {path}")
+    key = (str(path.resolve()), path.stat().st_mtime_ns, scale)
+    if key not in _IMPORTED:
+        try:
+            _IMPORTED[key] = load_shape(path, scale)
+        except ConvertError as e:
+            raise BuildError(f"{ctx.fid}: {e}")
+    shape = _IMPORTED[key]
+    solids = shape.Solids()
+    if not solids:
+        raise BuildError(f"{ctx.fid}: {path.name} has no closed volume (only open surfaces), so it cannot be a solid part; "
+                         "it can still be converted to STL or sliced for printing")
+    body = solids[0] if len(solids) == 1 else cq.Compound.makeCompound(solids)
+    off = p.get("offset")
+    if off:
+        body = body.translate(ctx.vec(off, "offset"))
+    return "add", body
+
+
 _TOOL_FEATURES = {
+    "import_body": _f_import_body,
     "extrude": _f_extrude, "revolve": _f_revolve, "hole": _f_hole, "sweep": _f_sweep, "loft": _f_loft,
     "sheet_base": _f_sheet_base, "sheet_flange": _f_sheet_flange, "sheet_hem": _f_sheet_hem, "rib": _f_rib,
     "pattern_linear": _f_pattern_linear, "pattern_circular": _f_pattern_circular, "mirror": _f_mirror,
@@ -1280,10 +1318,11 @@ def build(spec: PartSpec) -> BuildResult:
     if ctx.shape is None:
         raise BuildError("the part has no solid features")
     solids = ctx.shape.Solids()
-    if len(solids) != 1:
+    imported = any(f.type == "import_body" and not f.suppressed for f in spec.features)
+    if len(solids) != 1 and not imported:  # an imported file may hold several bodies (a kit of parts)
         raise BuildError(f"the part has {len(solids)} separate bodies; features must connect into one solid")
-    solid = solids[0]
-    if not solid.isValid():
+    solid = solids[0] if len(solids) == 1 else cq.Compound.makeCompound(solids)
+    if not imported and not solid.isValid():
         raise BuildError("resulting geometry is not a valid solid")
     bb = solid.BoundingBox()
     return BuildResult(

@@ -65,6 +65,7 @@ Version: $VERSION
 Architecture: amd64
 Maintainer: AI CAD <noreply@example.com>
 Depends: libcairo2, libgtk-3-0, libnss3, libxss1, libasound2t64 | libasound2
+Recommends: prusa-slicer
 Description: Parametric CAD with an AI design assistant
 CONTROL
 nice -n 10 dpkg-deb --root-owner-group -Zgzip -z6 --build "$PKG" desktop/dist/ >/dev/null

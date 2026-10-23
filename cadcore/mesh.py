@@ -14,6 +14,7 @@ import cadquery as cq
 
 from .builder import BuildResult
 
+BIG_FACES = 3000  # above this many faces (an imported organic mesh) the part is shown as one surface
 ON_TOL = 1e-3  # mm: a point this close to a tool body's surface lies on it
 
 
@@ -108,6 +109,14 @@ def describe(result: BuildResult, tolerance: float = 0.05, angular: float = 0.2)
     """Mesh plus entity table: {"faces": [...], "edges": [...]} with stable signatures."""
     owner = _Owner(result)
     solid = result.shape.val()
+    if len(solid.Faces()) > BIG_FACES:  # an imported organic mesh: one surface, no per-face picking or edges
+        verts, tris = solid.tessellate(tolerance, angular)
+        bb = solid.BoundingBox()
+        center = [_r((bb.xmin + bb.xmax) / 2), _r((bb.ymin + bb.ymax) / 2), _r((bb.zmin + bb.zmax) / 2)]
+        return {"faces": [{"index": 0, "feature": owner(cq.Vector(*center)), "type": "MESH", "point": center, "center": center,
+                           "area": None, "vertices": [_r(c) for v in verts for c in (v.x, v.y, v.z)],
+                           "triangles": [k for t in tris for k in t]}],
+                "edges": [], "vertices": [], "simplified": True}
     faces = []
     for i, face in enumerate(solid.Faces()):
         verts, tris = face.tessellate(tolerance, angular)

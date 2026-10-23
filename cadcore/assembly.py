@@ -137,6 +137,9 @@ def location(c: Component) -> cq.Location:
 
 # ---------------- component geometry ----------------
 
+from .convert import MESH_EXT, ConvertError, load_shape  # noqa: E402
+
+
 class _Cache:
     def __init__(self):
         self.items: dict[str, tuple[float, Any]] = {}
@@ -152,6 +155,12 @@ class _Cache:
             return self.items[key][1]
         if path.suffix.lower() in (".step", ".stp", ".brep"):
             shape = cq.Shape.importBrep(str(path)) if path.suffix.lower() == ".brep" else cq.importers.importStep(str(path)).val()
+            info = {"shape": shape, "name": path.stem, "material": None, "mass_kg": None, "result": None}
+        elif path.suffix.lower() in MESH_EXT | {".iges", ".igs", ".brp"}:  # meshes in mm, IGES
+            try:
+                shape = load_shape(path)
+            except ConvertError as e:
+                raise AssemblyError(str(e)) from e
             info = {"shape": shape, "name": path.stem, "material": None, "mass_kg": None, "result": None}
         else:
             from .project import Project
